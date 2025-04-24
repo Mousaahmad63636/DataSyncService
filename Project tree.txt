@@ -1,0 +1,71 @@
+PS C:\Users\Gundam> $folder = "C:\Users\Gundam\Desktop\QuickTechDataSyncService\QuickTechDataSyncService\QuickTechDataSyncService"
+PS C:\Users\Gundam> $root = Split-Path -Leaf $folder
+PS C:\Users\Gundam> Write-Output $root
+QuickTechDataSyncService
+PS C:\Users\Gundam>
+PS C:\Users\Gundam> function Write-FolderList {
+>>     param (
+>>         [string]$Path,
+>>         [string]$RelativePath = ""
+>>     )
+>>
+>>     # List files in the current folder
+>>     $files = Get-ChildItem -Path $Path -File
+>>     foreach ($file in $files) {
+>>         Write-Output "- $($file.Name)"
+>>     }
+>>
+>>     # Recurse into subfolders
+>>     $directories = Get-ChildItem -Path $Path -Directory
+>>     foreach ($dir in $directories) {
+>>         # Build the relative folder path to show context
+>>         $folderName = if ($RelativePath) { "$RelativePath\$($dir.Name)" } else { $dir.Name }
+>>         Write-Output "`n$folderName"
+>>         Write-FolderList -Path $dir.FullName -RelativePath $folderName
+>>     }
+>> }
+>>
+PS C:\Users\Gundam> Write-FolderList -Path $folder
+- App.xaml
+- App.xaml.cs
+- appsettings.json
+- AssemblyInfo.cs
+- Converters.cs
+- Program.cs
+- QuickTechDataSyncService.csproj
+- QuickTechDataSyncService.csproj.user
+- Startup.cs
+
+API
+- SyncController.cs
+
+converters
+
+Data
+- ApplicationDbContext.cs
+
+Models
+- BusinessSetting.cs
+- Category.cs
+- Customer.cs
+- Product.cs
+- Supplier.cs
+- SyncLog.cs
+- Transaction.cs
+- TransactionDetail.cs
+
+Models\DTOs
+- SyncRequestDto.cs
+- SyncResponseDto.cs
+
+Services
+- DataSyncService.cs
+- IDataSyncService.cs
+
+ViewModels
+- MainViewModel.cs
+- ViewModelBase.cs
+
+Views
+- MainWindow.xaml
+- MainWindow.xaml.cs
