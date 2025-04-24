@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace QuickTechDataSyncService.Services
 {
-    public class MongoDbSyncService : IFirebaseSyncService
+    public class MongoDbSyncService : IMongoDbSyncService
     {
         private readonly ApplicationDbContext _dbContext;
         private readonly IMongoDbService _mongoDbService;
@@ -25,14 +25,14 @@ namespace QuickTechDataSyncService.Services
             _logger = logger;
         }
 
-        public async Task<bool> InitializeFirebaseAsync()
+        public bool IsMongoInitialized => _mongoDbService.IsInitialized;
+
+        public async Task<bool> InitializeMongoAsync()
         {
             return await _mongoDbService.InitializeAsync();
         }
 
-        public bool IsFirebaseInitialized => _mongoDbService.IsInitialized;
-
-        public async Task<SyncResult> SyncAllDataToFirebaseAsync(string deviceId)
+        public async Task<SyncResult> SyncAllDataToMongoAsync(string deviceId)
         {
             var result = new SyncResult
             {
@@ -97,7 +97,7 @@ namespace QuickTechDataSyncService.Services
             }
         }
 
-        public async Task<SyncResult> SyncEntityToFirebaseAsync(string deviceId, string entityType)
+        public async Task<SyncResult> SyncEntityToMongoAsync(string deviceId, string entityType)
         {
             var result = new SyncResult
             {

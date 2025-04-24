@@ -31,7 +31,7 @@ namespace QuickTechDataSyncService
             services.AddScoped<IDataSyncService, DataSyncService>();
 
             services.AddSingleton<IMongoDbService, MongoDbService>();
-            services.AddScoped<IFirebaseSyncService, MongoDbSyncService>();
+            services.AddScoped<IMongoDbSyncService, MongoDbSyncService>();
 
             services.AddControllers()
                 .AddJsonOptions(options =>

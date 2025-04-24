@@ -192,9 +192,9 @@ namespace QuickTechDataSyncService.ViewModels
             try
             {
                 AddLogMessage("Initializing MongoDB...");
-                var mongoService = _host.Services.GetRequiredService<IFirebaseSyncService>();
+                var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
 
-                var success = await mongoService.InitializeFirebaseAsync();
+                var success = await mongoService.InitializeMongoAsync();
 
                 if (success)
                 {
@@ -226,8 +226,8 @@ namespace QuickTechDataSyncService.ViewModels
                 IsSyncing = true;
                 AddLogMessage("Starting full sync to MongoDB...");
 
-                var mongoService = _host.Services.GetRequiredService<IFirebaseSyncService>();
-                var result = await mongoService.SyncAllDataToFirebaseAsync(DeviceId);
+                var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
+                var result = await mongoService.SyncAllDataToMongoAsync(DeviceId);
 
                 if (result.Success)
                 {
@@ -258,8 +258,8 @@ namespace QuickTechDataSyncService.ViewModels
                 IsSyncing = true;
                 AddLogMessage($"Starting sync of {entityType} to MongoDB...");
 
-                var mongoService = _host.Services.GetRequiredService<IFirebaseSyncService>();
-                var result = await mongoService.SyncEntityToFirebaseAsync(DeviceId, entityType);
+                var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
+                var result = await mongoService.SyncEntityToMongoAsync(DeviceId, entityType);
 
                 if (result.Success)
                 {
