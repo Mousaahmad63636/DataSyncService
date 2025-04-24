@@ -28,10 +28,12 @@ namespace QuickTechDataSyncService
                     sqlOptions => sqlOptions.EnableRetryOnFailure());
             });
 
+            // Add both the original and new direct services
             services.AddScoped<IDataSyncService, DataSyncService>();
-
             services.AddSingleton<IMongoDbService, MongoDbService>();
-            services.AddScoped<IMongoDbSyncService, MongoDbSyncService>();
+
+            // Register the new direct MongoDB service as the primary IMongoDbSyncService implementation
+            services.AddScoped<IMongoDbSyncService, DirectMongoDbService>();
 
             services.AddControllers()
                 .AddJsonOptions(options =>

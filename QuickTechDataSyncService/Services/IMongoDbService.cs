@@ -1,4 +1,6 @@
 ﻿using QuickTechDataSyncService.Models;
+using MongoDB.Driver;
+using MongoDB.Bson;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -16,5 +18,8 @@ namespace QuickTechDataSyncService.Services
         Task<bool> SyncTransactionsAsync(IEnumerable<Transaction> transactions);
         Task<bool> SyncBusinessSettingsAsync(IEnumerable<BusinessSetting> settings);
         Task LogSyncActivityAsync(string deviceId, string entityType, bool success, int recordCount);
+
+        // New method to expose the MongoDB database for direct access when needed
+        IMongoDatabase GetMongoDatabase();
     }
 }

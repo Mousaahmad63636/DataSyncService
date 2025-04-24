@@ -1,6 +1,6 @@
-﻿// QuickTechDataSyncService/Models/SyncResult.cs
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace QuickTechDataSyncService.Models
 {
@@ -12,8 +12,20 @@ namespace QuickTechDataSyncService.Models
         public string EntityType { get; set; } = string.Empty;
         public bool Success { get; set; } = false;
         public string ErrorMessage { get; set; } = string.Empty;
-        public Dictionary<string, int> RecordCounts { get; set; } = new Dictionary<string, int>();
+
+        private Dictionary<string, int> _recordCounts = new Dictionary<string, int>();
+        public Dictionary<string, int> RecordCounts
+        {
+            get => _recordCounts;
+            set => _recordCounts = value ?? new Dictionary<string, int>();
+        }
 
         public TimeSpan Duration => EndTime - StartTime;
+
+        public int RecordCountSum => RecordCounts.Values.Sum();
+
+        // Helper property to get a comma-separated string of record counts
+        public string RecordCountSummary => string.Join(", ",
+            RecordCounts.Select(kv => $"{kv.Key}: {kv.Value}"));
     }
 }
