@@ -105,17 +105,16 @@ namespace QuickTechDataSyncService.ViewModels
             TestConnectionCommand = new RelayCommand(TestConnection);
             ClearLogsCommand = new RelayCommand(ClearLogs);
 
-            InitializeMongoDbCommand = new RelayCommand(InitializeMongoDb, () => !IsMongoInitialized && !IsSyncing);
-            SyncAllToMongoDbCommand = new RelayCommand(SyncAllToMongoDb, () => IsMongoInitialized && !IsSyncing);
-            SyncProductsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Products"), () => IsMongoInitialized && !IsSyncing);
-            SyncCategoriesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Categories"), () => IsMongoInitialized && !IsSyncing);
-            SyncCustomersToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Customers"), () => IsMongoInitialized && !IsSyncing);
-            SyncTransactionsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Transactions"), () => IsMongoInitialized && !IsSyncing);
-            SyncSettingsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Business_Settings"), () => IsMongoInitialized && !IsSyncing);
+            InitializeMongoDbCommand = new RelayCommand(InitializeMongoDb);
+            SyncAllToMongoDbCommand = new RelayCommand(SyncAllToMongoDb, () => !IsSyncing);
+            SyncProductsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Products"), () => !IsSyncing);
+            SyncCategoriesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Categories"), () => !IsSyncing);
+            SyncCustomersToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Customers"), () => !IsSyncing);
+            SyncTransactionsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Transactions"), () => !IsSyncing);
+            SyncSettingsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Business_Settings"), () => !IsSyncing);
 
             AddLogMessage("Application started. Click 'Start Server' to begin serving requests.");
         }
-
         private async void StartServer()
         {
             try
@@ -201,6 +200,9 @@ namespace QuickTechDataSyncService.ViewModels
                     MongoStatus = "Connected";
                     IsMongoInitialized = true;
                     AddLogMessage("MongoDB initialized successfully");
+
+                    // Raise property changed for IsMongoInitialized
+                    OnPropertyChanged(nameof(IsMongoInitialized));
                 }
                 else
                 {
@@ -216,7 +218,6 @@ namespace QuickTechDataSyncService.ViewModels
                 AddLogMessage($"MongoDB initialization error: {ex.Message}");
             }
         }
-
         private async void SyncAllToMongoDb()
         {
             if (IsSyncing) return;
