@@ -25,8 +25,8 @@ namespace QuickTechDataSyncService.ViewModels
         private ObservableCollection<string> _logMessages = new();
         private bool _isServerRunning = false;
         private string _connectionStatus = "Disconnected";
-        private string _firestoreStatus = "Not Initialized";
-        private bool _isFirestoreInitialized = false;
+        private string _mongoStatus = "Not Initialized";
+        private bool _isMongoInitialized = false;
         private bool _isSyncing = false;
         private string _deviceId = $"Desktop-{Environment.MachineName}";
 
@@ -60,16 +60,16 @@ namespace QuickTechDataSyncService.ViewModels
             set => SetProperty(ref _connectionStatus, value);
         }
 
-        public string FirestoreStatus
+        public string MongoStatus
         {
-            get => _firestoreStatus;
-            set => SetProperty(ref _firestoreStatus, value);
+            get => _mongoStatus;
+            set => SetProperty(ref _mongoStatus, value);
         }
 
-        public bool IsFirestoreInitialized
+        public bool IsMongoInitialized
         {
-            get => _isFirestoreInitialized;
-            set => SetProperty(ref _isFirestoreInitialized, value);
+            get => _isMongoInitialized;
+            set => SetProperty(ref _isMongoInitialized, value);
         }
 
         public bool IsSyncing
@@ -88,35 +88,31 @@ namespace QuickTechDataSyncService.ViewModels
         public ICommand StopServerCommand { get; }
         public ICommand TestConnectionCommand { get; }
         public ICommand ClearLogsCommand { get; }
-        public ICommand InitializeFirestoreCommand { get; }
-        public ICommand SyncAllToFirestoreCommand { get; }
-        public ICommand SyncProductsToFirestoreCommand { get; }
-        public ICommand SyncCategoriestoFirestoreCommand { get; }
-        public ICommand SyncCustomersToFirestoreCommand { get; }
-        public ICommand SyncTransactionsToFirestoreCommand { get; }
-        public ICommand SyncSettingsToFirestoreCommand { get; }
+        public ICommand InitializeMongoDbCommand { get; }
+        public ICommand SyncAllToMongoDbCommand { get; }
+        public ICommand SyncProductsToMongoDbCommand { get; }
+        public ICommand SyncCategoriesToMongoDbCommand { get; }
+        public ICommand SyncCustomersToMongoDbCommand { get; }
+        public ICommand SyncTransactionsToMongoDbCommand { get; }
+        public ICommand SyncSettingsToMongoDbCommand { get; }
 
         public MainViewModel()
         {
-            // Build the web application host
             _host = Program.CreateHostBuilder(Array.Empty<string>()).Build();
 
-            // Create commands
             StartServerCommand = new RelayCommand(StartServer, () => !IsServerRunning);
             StopServerCommand = new RelayCommand(StopServer, () => IsServerRunning);
             TestConnectionCommand = new RelayCommand(TestConnection);
             ClearLogsCommand = new RelayCommand(ClearLogs);
 
-            // Firestore commands
-            InitializeFirestoreCommand = new RelayCommand(InitializeFirestore, () => !IsFirestoreInitialized && !IsSyncing);
-            SyncAllToFirestoreCommand = new RelayCommand(SyncAllToFirestore, () => IsFirestoreInitialized && !IsSyncing);
-            SyncProductsToFirestoreCommand = new RelayCommand(() => SyncEntityToFirestore("Products"), () => IsFirestoreInitialized && !IsSyncing);
-            SyncCategoriestoFirestoreCommand = new RelayCommand(() => SyncEntityToFirestore("Categories"), () => IsFirestoreInitialized && !IsSyncing);
-            SyncCustomersToFirestoreCommand = new RelayCommand(() => SyncEntityToFirestore("Customers"), () => IsFirestoreInitialized && !IsSyncing);
-            SyncTransactionsToFirestoreCommand = new RelayCommand(() => SyncEntityToFirestore("Transactions"), () => IsFirestoreInitialized && !IsSyncing);
-            SyncSettingsToFirestoreCommand = new RelayCommand(() => SyncEntityToFirestore("Business_Settings"), () => IsFirestoreInitialized && !IsSyncing);
+            InitializeMongoDbCommand = new RelayCommand(InitializeMongoDb, () => !IsMongoInitialized && !IsSyncing);
+            SyncAllToMongoDbCommand = new RelayCommand(SyncAllToMongoDb, () => IsMongoInitialized && !IsSyncing);
+            SyncProductsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Products"), () => IsMongoInitialized && !IsSyncing);
+            SyncCategoriesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Categories"), () => IsMongoInitialized && !IsSyncing);
+            SyncCustomersToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Customers"), () => IsMongoInitialized && !IsSyncing);
+            SyncTransactionsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Transactions"), () => IsMongoInitialized && !IsSyncing);
+            SyncSettingsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Business_Settings"), () => IsMongoInitialized && !IsSyncing);
 
-            // Add initial log
             AddLogMessage("Application started. Click 'Start Server' to begin serving requests.");
         }
 
@@ -127,7 +123,6 @@ namespace QuickTechDataSyncService.ViewModels
                 AddLogMessage("Starting server...");
                 await _host.StartAsync();
 
-                // Get server URLs
                 var server = _host.Services.GetRequiredService<IServer>();
                 var addressFeature = server.Features.Get<IServerAddressesFeature>();
                 ServerUrl = addressFeature?.Addresses.FirstOrDefault() ?? "http://localhost:5000";
@@ -192,47 +187,47 @@ namespace QuickTechDataSyncService.ViewModels
             AddLogMessage("Logs cleared");
         }
 
-        private async void InitializeFirestore()
+        private async void InitializeMongoDb()
         {
             try
             {
-                AddLogMessage("Initializing Firestore...");
-                var firebaseService = _host.Services.GetRequiredService<IFirebaseSyncService>();
+                AddLogMessage("Initializing MongoDB...");
+                var mongoService = _host.Services.GetRequiredService<IFirebaseSyncService>();
 
-                var success = await firebaseService.InitializeFirebaseAsync();
+                var success = await mongoService.InitializeFirebaseAsync();
 
                 if (success)
                 {
-                    FirestoreStatus = "Connected";
-                    IsFirestoreInitialized = true;
-                    AddLogMessage("Firestore initialized successfully");
+                    MongoStatus = "Connected";
+                    IsMongoInitialized = true;
+                    AddLogMessage("MongoDB initialized successfully");
                 }
                 else
                 {
-                    FirestoreStatus = "Error";
-                    IsFirestoreInitialized = false;
-                    AddLogMessage("Failed to initialize Firestore. Check firebase-config.json file.");
+                    MongoStatus = "Error";
+                    IsMongoInitialized = false;
+                    AddLogMessage("Failed to initialize MongoDB. Check connection settings.");
                 }
             }
             catch (Exception ex)
             {
-                FirestoreStatus = "Error";
-                IsFirestoreInitialized = false;
-                AddLogMessage($"Firestore initialization error: {ex.Message}");
+                MongoStatus = "Error";
+                IsMongoInitialized = false;
+                AddLogMessage($"MongoDB initialization error: {ex.Message}");
             }
         }
 
-        private async void SyncAllToFirestore()
+        private async void SyncAllToMongoDb()
         {
             if (IsSyncing) return;
 
             try
             {
                 IsSyncing = true;
-                AddLogMessage("Starting full sync to Firestore...");
+                AddLogMessage("Starting full sync to MongoDB...");
 
-                var firebaseService = _host.Services.GetRequiredService<IFirebaseSyncService>();
-                var result = await firebaseService.SyncAllDataToFirebaseAsync(DeviceId);
+                var mongoService = _host.Services.GetRequiredService<IFirebaseSyncService>();
+                var result = await mongoService.SyncAllDataToFirebaseAsync(DeviceId);
 
                 if (result.Success)
                 {
@@ -254,17 +249,17 @@ namespace QuickTechDataSyncService.ViewModels
             }
         }
 
-        private async void SyncEntityToFirestore(string entityType)
+        private async void SyncEntityToMongoDb(string entityType)
         {
             if (IsSyncing) return;
 
             try
             {
                 IsSyncing = true;
-                AddLogMessage($"Starting sync of {entityType} to Firestore...");
+                AddLogMessage($"Starting sync of {entityType} to MongoDB...");
 
-                var firebaseService = _host.Services.GetRequiredService<IFirebaseSyncService>();
-                var result = await firebaseService.SyncEntityToFirebaseAsync(DeviceId, entityType);
+                var mongoService = _host.Services.GetRequiredService<IFirebaseSyncService>();
+                var result = await mongoService.SyncEntityToFirebaseAsync(DeviceId, entityType);
 
                 if (result.Success)
                 {
@@ -292,7 +287,6 @@ namespace QuickTechDataSyncService.ViewModels
             {
                 LogMessages.Insert(0, $"[{DateTime.Now:HH:mm:ss}] {message}");
 
-                // Keep only the last 100 messages
                 while (LogMessages.Count > 100)
                 {
                     LogMessages.RemoveAt(LogMessages.Count - 1);

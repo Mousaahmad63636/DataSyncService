@@ -14,9 +14,6 @@
 	  <Page Remove="converters\**" />
 	</ItemGroup>
 	<ItemGroup>
-	  <None Remove="firebase-config.json" />
-	</ItemGroup>
-	<ItemGroup>
 		<PackageReference Include="FirebaseAdmin" Version="2.4.0" />
 		<PackageReference Include="Google.Cloud.Firestore" Version="3.8.0" />
 		<PackageReference Include="Google.Cloud.Storage.V1" Version="4.8.0" />
@@ -27,6 +24,7 @@
 		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
 		<PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+		<PackageReference Include="MongoDB.Driver" Version="2.22.0" />
 	</ItemGroup>
 	<ItemGroup>
 		<None Update="appsettings.json">

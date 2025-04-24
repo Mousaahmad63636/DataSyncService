@@ -22,21 +22,17 @@ namespace QuickTechDataSyncService
 
         public void ConfigureServices(IServiceCollection services)
         {
-            // Configure database
             services.AddDbContext<ApplicationDbContext>(options =>
             {
                 options.UseSqlServer(Configuration.GetConnectionString("DefaultConnection"),
                     sqlOptions => sqlOptions.EnableRetryOnFailure());
             });
 
-            // Add services
             services.AddScoped<IDataSyncService, DataSyncService>();
 
-            // Add Firebase services
-            services.AddSingleton<IFirestoreService, FirestoreService>();
-            services.AddScoped<IFirebaseSyncService, FirebaseSyncService>();
+            services.AddSingleton<IMongoDbService, MongoDbService>();
+            services.AddScoped<IFirebaseSyncService, MongoDbSyncService>();
 
-            // Configure controllers with JSON options
             services.AddControllers()
                 .AddJsonOptions(options =>
                 {
@@ -44,7 +40,6 @@ namespace QuickTechDataSyncService
                     options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
                 });
 
-            // Add Swagger
             services.AddEndpointsApiExplorer();
             services.AddSwaggerGen(c =>
             {
@@ -56,7 +51,6 @@ namespace QuickTechDataSyncService
                 });
             });
 
-            // Add CORS
             services.AddCors(options =>
             {
                 options.AddPolicy("AllowAll", builder =>
@@ -67,6 +61,7 @@ namespace QuickTechDataSyncService
                 });
             });
         }
+
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
             if (env.IsDevelopment())

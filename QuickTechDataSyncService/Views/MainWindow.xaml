@@ -66,7 +66,7 @@
             </StackPanel>
         </Grid>
 
-        <!-- Firebase Section -->
+        <!-- MongoDB Section -->
         <Grid Grid.Row="2" Margin="0,0,0,15">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -79,13 +79,13 @@
             </Grid.RowDefinitions>
 
             <!-- Section Title -->
-            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Firebase Synchronization" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
+            <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="MongoDB Synchronization" FontSize="16" FontWeight="Bold" Margin="0,0,0,10"/>
 
-            <!-- Firestore Status -->
+            <!-- MongoDB Status -->
             <StackPanel Grid.Column="0" Grid.Row="1" Orientation="Horizontal" Margin="0,0,10,10">
-                <TextBlock Text="Firestore Status: " FontWeight="SemiBold" VerticalAlignment="Center"/>
-                <Border CornerRadius="3" Padding="8,3" Margin="5,0,0,0" Background="{Binding FirestoreStatus, Converter={StaticResource StatusToBrushConverter}}">
-                    <TextBlock Text="{Binding FirestoreStatus}" Foreground="White" FontWeight="SemiBold"/>
+                <TextBlock Text="MongoDB Status: " FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <Border CornerRadius="3" Padding="8,3" Margin="5,0,0,0" Background="{Binding MongoStatus, Converter={StaticResource StatusToBrushConverter}}">
+                    <TextBlock Text="{Binding MongoStatus}" Foreground="White" FontWeight="SemiBold"/>
                 </Border>
             </StackPanel>
 
@@ -95,19 +95,19 @@
                 <TextBox Text="{Binding DeviceId}" Width="200" Margin="5,0,0,0" VerticalAlignment="Center"/>
             </StackPanel>
 
-            <!-- Firestore Controls -->
+            <!-- MongoDB Controls -->
             <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Orientation="Vertical" Margin="0,0,0,0">
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                    <Button Content="Initialize Firestore" Command="{Binding InitializeFirestoreCommand}" Padding="12,5" Margin="0,0,10,0"/>
-                    <Button Content="Sync All Data" Command="{Binding SyncAllToFirestoreCommand}" Padding="12,5" Margin="0,0,10,0"/>
+                    <Button Content="Initialize MongoDB" Command="{Binding InitializeMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
+                    <Button Content="Sync All Data" Command="{Binding SyncAllToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal">
-                    <Button Content="Sync Products" Command="{Binding SyncProductsToFirestoreCommand}" Padding="12,5" Margin="0,0,10,0"/>
-                    <Button Content="Sync Categories" Command="{Binding SyncCategoriestoFirestoreCommand}" Padding="12,5" Margin="0,0,10,0"/>
-                    <Button Content="Sync Customers" Command="{Binding SyncCustomersToFirestoreCommand}" Padding="12,5" Margin="0,0,10,0"/>
-                    <Button Content="Sync Transactions" Command="{Binding SyncTransactionsToFirestoreCommand}" Padding="12,5" Margin="0,0,10,0"/>
-                    <Button Content="Sync Settings" Command="{Binding SyncSettingsToFirestoreCommand}" Padding="12,5"/>
+                    <Button Content="Sync Products" Command="{Binding SyncProductsToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
+                    <Button Content="Sync Categories" Command="{Binding SyncCategoriesToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
+                    <Button Content="Sync Customers" Command="{Binding SyncCustomersToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
+                    <Button Content="Sync Transactions" Command="{Binding SyncTransactionsToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
+                    <Button Content="Sync Settings" Command="{Binding SyncSettingsToMongoDbCommand}" Padding="12,5"/>
                 </StackPanel>
             </StackPanel>
         </Grid>
