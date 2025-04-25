@@ -28,6 +28,7 @@ namespace QuickTechDataSyncService.ViewModels
         private string _mongoStatus = "Not Initialized";
         private bool _isMongoInitialized = false;
         private bool _isSyncing = false;
+        private readonly ILogger<MainViewModel> _logger;
         private string _deviceId = $"Desktop-{Environment.MachineName}";
 
         public string ServerStatus
@@ -96,8 +97,9 @@ namespace QuickTechDataSyncService.ViewModels
         public ICommand SyncTransactionsToMongoDbCommand { get; }
         public ICommand SyncSettingsToMongoDbCommand { get; }
 
-        public MainViewModel()
+        public MainViewModel(ILogger<MainViewModel> logger = null)
         {
+            _logger = logger ?? CreateDefaultLogger();
             _host = Program.CreateHostBuilder(Array.Empty<string>()).Build();
 
             StartServerCommand = new RelayCommand(StartServer, () => !IsServerRunning);
@@ -114,6 +116,20 @@ namespace QuickTechDataSyncService.ViewModels
             SyncSettingsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Business_Settings"), () => !IsSyncing);
 
             AddLogMessage("Application started. Click 'Start Server' to begin serving requests.");
+        }
+
+        private ILogger<MainViewModel> CreateDefaultLogger()
+        {
+            var loggerFactory = LoggerFactory.Create(builder =>
+            {
+                builder
+                    .AddFilter("Microsoft", LogLevel.Warning)
+                    .AddFilter("System", LogLevel.Warning)
+                    .AddFilter("QuickTechDataSyncService", LogLevel.Information)
+                    .AddConsole();
+            });
+
+            return loggerFactory.CreateLogger<MainViewModel>();
         }
         private async void StartServer()
         {
@@ -269,11 +285,17 @@ namespace QuickTechDataSyncService.ViewModels
                 }
                 else
                 {
-                    AddLogMessage($"Sync of {entityType} failed: {result.ErrorMessage}");
+                    // More detailed error reporting
+                    string errorDetails = !string.IsNullOrEmpty(result.ErrorMessage)
+                        ? result.ErrorMessage
+                        : "Unknown error occurred";
+
+                    AddLogMessage($"Sync of {entityType} failed: {errorDetails}");
                 }
             }
             catch (Exception ex)
             {
+                // Enhanced exception logging
                 AddLogMessage($"Error during {entityType} sync: {ex.Message}");
             }
             finally
@@ -281,7 +303,6 @@ namespace QuickTechDataSyncService.ViewModels
                 IsSyncing = false;
             }
         }
-
         public void AddLogMessage(string message)
         {
             Application.Current.Dispatcher.Invoke(() =>

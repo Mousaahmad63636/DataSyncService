@@ -5816,11 +5816,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Gundam\\Desktop\\DataSyncService v3 mango max\\DataSyncService\\QuickTechDataSyncService\\QuickTechDataSyncService.csproj",
+      "projectUniqueName": "C:\\Users\\Gundam\\Desktop\\DataSyncService v4 mango max\\DataSyncService\\QuickTechDataSyncService\\QuickTechDataSyncService.csproj",
       "projectName": "QuickTechDataSyncService",
-      "projectPath": "C:\\Users\\Gundam\\Desktop\\DataSyncService v3 mango max\\DataSyncService\\QuickTechDataSyncService\\QuickTechDataSyncService.csproj",
+      "projectPath": "C:\\Users\\Gundam\\Desktop\\DataSyncService v4 mango max\\DataSyncService\\QuickTechDataSyncService\\QuickTechDataSyncService.csproj",
       "packagesPath": "C:\\Users\\Gundam\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Gundam\\Desktop\\DataSyncService v3 mango max\\DataSyncService\\QuickTechDataSyncService\\obj\\",
+      "outputPath": "C:\\Users\\Gundam\\Desktop\\DataSyncService v4 mango max\\DataSyncService\\QuickTechDataSyncService\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

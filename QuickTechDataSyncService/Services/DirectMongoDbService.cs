@@ -3,20 +3,18 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using QuickTechDataSyncService.Data;
 using QuickTechDataSyncService.Models;
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace QuickTechDataSyncService.Services
 {
-    /// <summary>
-    /// An implementation of MongoDB synchronization that bypasses Entity Framework completely
-    /// and works directly with ADO.NET and MongoDB BSON documents.
-    /// </summary>
     public class DirectMongoDbService : IMongoDbSyncService
     {
         private readonly ApplicationDbContext _dbContext;
@@ -50,14 +48,13 @@ namespace QuickTechDataSyncService.Services
                     return false;
                 }
 
-                _logger.LogInformation("Initializing MongoDB connection with connection string");
+                _logger.LogInformation("Initializing MongoDB connection");
                 var settings = MongoClientSettings.FromConnectionString(connectionString);
                 settings.ServerSelectionTimeout = TimeSpan.FromSeconds(10);
                 _mongoClient = new MongoClient(settings);
 
                 _mongoDatabase = _mongoClient.GetDatabase(_databaseName);
 
-                // Test the connection
                 var result = await _mongoDatabase.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1));
                 if (result["ok"] == 1)
                 {
@@ -101,14 +98,12 @@ namespace QuickTechDataSyncService.Services
                     }
                 }
 
-                // Get connection
                 var connection = _dbContext.Database.GetDbConnection() as SqlConnection;
                 if (connection.State != ConnectionState.Open)
                 {
                     await connection.OpenAsync();
                 }
 
-                // Sync each entity type
                 await SyncCategoriesDirect(connection, result);
                 await SyncProductsDirect(connection, result);
                 await SyncCustomersDirect(connection, result);
@@ -117,7 +112,6 @@ namespace QuickTechDataSyncService.Services
 
                 await LogSyncActivity(deviceId, "All", true, result.RecordCounts.Values.Sum());
 
-                // Fix for line 121 - Change from method group to method call  
                 result.Success = result.RecordCounts.Values.Sum() > 0;
                 result.EndTime = DateTime.UtcNow;
                 return result;
@@ -155,7 +149,6 @@ namespace QuickTechDataSyncService.Services
                     }
                 }
 
-                // Get connection
                 var connection = _dbContext.Database.GetDbConnection() as SqlConnection;
                 if (connection.State != ConnectionState.Open)
                 {
@@ -190,7 +183,6 @@ namespace QuickTechDataSyncService.Services
                         break;
                 }
 
-                // Log the activity if we have a count
                 if (result.RecordCounts.TryGetValue(entityType, out int count))
                 {
                     await LogSyncActivity(deviceId, entityType, result.Success, count);
@@ -203,7 +195,7 @@ namespace QuickTechDataSyncService.Services
             {
                 _logger.LogError(ex, "Error in SyncEntityToMongoAsync: {Message}", ex.Message);
                 result.Success = false;
-                result.ErrorMessage = ex.Message;
+                result.ErrorMessage = $"{entityType} sync failed: {ex.Message}";
                 result.EndTime = DateTime.UtcNow;
                 return result;
             }
@@ -251,8 +243,7 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     var bulkResult = await collection.BulkWriteAsync(bulkOps);
-                    _logger.LogInformation("Synced {Count} categories. Inserted: {Inserted}, Modified: {Modified}",
-                        count, bulkResult.InsertedCount, bulkResult.ModifiedCount);
+                    _logger.LogInformation("Synced {Count} categories", count);
                 }
                 else
                 {
@@ -304,20 +295,19 @@ namespace QuickTechDataSyncService.Services
                                 { "name", reader.GetString(2) },
                                 { "description", reader.IsDBNull(3) ? string.Empty : reader.GetString(3) },
                                 { "categoryId", reader.GetInt32(4) },
-                                { "purchasePrice", reader.GetDecimal(5) },
-                                { "salePrice", reader.GetDecimal(6) },
-                                { "currentStock", reader.GetDecimal(7) },
+                                { "purchasePrice", BsonDecimal128.Create(reader.GetDecimal(5)) },
+                                { "salePrice", BsonDecimal128.Create(reader.GetDecimal(6)) },
+                                { "currentStock", BsonDecimal128.Create(reader.GetDecimal(7)) },
                                 { "minimumStock", reader.GetInt32(8) },
-                                { "supplierId", reader.IsDBNull(9) ? BsonNull.Value : reader.GetInt32(9) },
+                                { "supplierId", reader.IsDBNull(9) ? BsonNull.Value : new BsonInt32(reader.GetInt32(9)) },
                                 { "isActive", reader.GetBoolean(10) },
-                                { "createdAt", reader.GetDateTime(11) },
+                                { "createdAt", reader.GetDateTime(11).ToUniversalTime() },
                                 { "speed", reader.IsDBNull(12) ? string.Empty : reader.GetString(12) },
-                                { "updatedAt", reader.IsDBNull(13) ? BsonNull.Value : reader.GetDateTime(13) },
+                                { "updatedAt", reader.IsDBNull(13) ? BsonNull.Value : new BsonDateTime(reader.GetDateTime(13).ToUniversalTime()) },
                                 { "imagePath", reader.IsDBNull(14) ? string.Empty : reader.GetString(14) }
                             };
 
-                            // Add category info if available
-                            if (!reader.IsDBNull(15)) // CategoryName field
+                            if (!reader.IsDBNull(15))
                             {
                                 doc.Add("category", new BsonDocument
                                 {
@@ -339,8 +329,7 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     var bulkResult = await collection.BulkWriteAsync(bulkOps);
-                    _logger.LogInformation("Synced {Count} products. Inserted: {Inserted}, Modified: {Modified}",
-                        count, bulkResult.InsertedCount, bulkResult.ModifiedCount);
+                    _logger.LogInformation("Synced {Count} products", count);
                 }
                 else
                 {
@@ -388,9 +377,9 @@ namespace QuickTechDataSyncService.Services
                                 { "email", reader.IsDBNull(3) ? string.Empty : reader.GetString(3) },
                                 { "address", reader.IsDBNull(4) ? string.Empty : reader.GetString(4) },
                                 { "isActive", reader.GetBoolean(5) },
-                                { "createdAt", reader.GetDateTime(6) },
-                                { "updatedAt", reader.IsDBNull(7) ? BsonNull.Value : reader.GetDateTime(7) },
-                                { "balance", reader.GetDecimal(8) }
+                                { "createdAt", reader.GetDateTime(6).ToUniversalTime() },
+                                { "updatedAt", reader.IsDBNull(7) ? BsonNull.Value : new BsonDateTime(reader.GetDateTime(7).ToUniversalTime()) },
+                                { "balance", BsonDecimal128.Create(reader.GetDecimal(8)) }
                             };
 
                             var filter = Builders<BsonDocument>.Filter.Eq("_id", reader.GetInt32(0));
@@ -403,8 +392,7 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     var bulkResult = await collection.BulkWriteAsync(bulkOps);
-                    _logger.LogInformation("Synced {Count} customers. Inserted: {Inserted}, Modified: {Modified}",
-                        count, bulkResult.InsertedCount, bulkResult.ModifiedCount);
+                    _logger.LogInformation("Synced {Count} customers", count);
                 }
                 else
                 {
@@ -453,7 +441,7 @@ namespace QuickTechDataSyncService.Services
                                 { "group", reader.IsDBNull(4) ? string.Empty : reader.GetString(4) },
                                 { "dataType", reader.IsDBNull(5) ? "string" : reader.GetString(5) },
                                 { "isSystem", reader.GetBoolean(6) },
-                                { "lastModified", reader.GetDateTime(7) },
+                                { "lastModified", reader.GetDateTime(7).ToUniversalTime() },
                                 { "modifiedBy", reader.IsDBNull(8) ? string.Empty : reader.GetString(8) }
                             };
 
@@ -467,8 +455,7 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     var bulkResult = await collection.BulkWriteAsync(bulkOps);
-                    _logger.LogInformation("Synced {Count} business settings. Inserted: {Inserted}, Modified: {Modified}",
-                        count, bulkResult.InsertedCount, bulkResult.ModifiedCount);
+                    _logger.LogInformation("Synced {Count} business settings", count);
                 }
                 else
                 {
@@ -491,92 +478,146 @@ namespace QuickTechDataSyncService.Services
             {
                 _logger.LogInformation("Starting direct sync of transactions to MongoDB");
                 var collection = _mongoDatabase.GetCollection<BsonDocument>("transactions");
-                int count = 0;
+                var transactionCount = 0;
 
                 using (var command = connection.CreateCommand())
                 {
-                    // Taking most recent 100 transactions for performance
                     command.CommandText = @"
-                        SELECT TOP 100 
-                            TransactionId, CustomerId, CustomerName, TotalAmount, PaidAmount, 
-                            TransactionDate, TransactionType, Status, PaymentMethod, 
-                            CashierId, CashierName, CashierRole
-                        FROM 
-                            Transactions
-                        ORDER BY 
-                            TransactionDate DESC";
+                SELECT TOP 5
+                    TransactionId, CustomerId, CustomerName, TotalAmount, PaidAmount, 
+                    TransactionDate, TransactionType, Status, PaymentMethod, 
+                    CashierId, CashierName, CashierRole
+                FROM Transactions
+                ORDER BY TransactionDate DESC";
+                    command.CommandTimeout = 120;
 
                     using (var reader = await command.ExecuteReaderAsync())
                     {
                         while (await reader.ReadAsync())
                         {
-                            count++;
                             var transactionId = reader.GetInt32(0);
 
-                            _logger.LogInformation("Processing transaction ID: {ID}", transactionId);
-
-                            var doc = new BsonDocument
+                            try
                             {
-                                { "_id", transactionId },
-                                { "transactionId", transactionId }
-                            };
+                                var doc = new BsonDocument
+                        {
+                            { "_id", transactionId },
+                            { "transactionId", transactionId }
+                        };
 
-                            // Add nullable CustomerId
-                            if (!reader.IsDBNull(1))
-                            {
-                                doc.Add("customerId", reader.GetInt32(1));
+                                // customerId (nullable int)
+                                if (!reader.IsDBNull(1))
+                                    doc.Add("customerId", reader.GetInt32(1));
+                                else
+                                    doc.Add("customerId", BsonNull.Value);
+
+                                // customerName
+                                doc.Add("customerName",
+                                    reader.IsDBNull(2) ? string.Empty : reader.GetString(2));
+
+                                // amounts
+                                decimal totalAmount = reader.IsDBNull(3)
+                                    ? 0m
+                                    : reader.GetDecimal(3);
+                                doc.Add("totalAmount", BsonDecimal128.Create(totalAmount));
+
+                                decimal paidAmount = reader.IsDBNull(4)
+                                    ? 0m
+                                    : reader.GetDecimal(4);
+                                doc.Add("paidAmount", BsonDecimal128.Create(paidAmount));
+
+                                // date
+                                DateTime txDate = reader.IsDBNull(5)
+                                    ? DateTime.UtcNow
+                                    : reader.GetDateTime(5);
+                                doc.Add("transactionDate", txDate.ToUniversalTime());
+
+                                // robust int parsing helper:
+                                int ParseIntField(int idx)
+                                {
+                                    if (reader.IsDBNull(idx)) return 0;
+                                    object raw = reader.GetValue(idx);
+                                    return raw switch
+                                    {
+                                        int i => i,
+                                        long l => Convert.ToInt32(l),
+                                        string s => int.TryParse(s, out var v) ? v : 0,
+                                        decimal d => Convert.ToInt32(d),
+                                        _ => 0
+                                    };
+                                }
+
+                                // transactionType & status
+                                int transactionTypeValue = ParseIntField(6);
+                                int statusValue = ParseIntField(7);
+                                doc.Add("transactionType", GetEnumName(typeof(TransactionType), transactionTypeValue));
+                                doc.Add("status", GetEnumName(typeof(TransactionStatus), statusValue));
+
+                                // other strings
+                                doc.Add("paymentMethod", reader.IsDBNull(8) ? string.Empty : reader.GetString(8));
+                                doc.Add("cashierId", reader.IsDBNull(9) ? string.Empty : reader.GetString(9));
+                                doc.Add("cashierName", reader.IsDBNull(10) ? string.Empty : reader.GetString(10));
+                                doc.Add("cashierRole", reader.IsDBNull(11) ? string.Empty : reader.GetString(11));
+
+                                // details
+                                var details = await GetTransactionDetailsDirect(connection, transactionId);
+                                doc.Add("transactionDetails", details);
+                                doc.Add("detailCount", details.Count);
+
+                                // guard against >15 MB
+                                if (doc.ToBson().Length > 15 * 1024 * 1024)
+                                {
+                                    int cnt = details.Count;
+                                    doc["transactionDetails"] = new BsonArray();
+                                    doc.Add("detailsRemovedForSize", true);
+                                    doc.Add("originalDetailCount", cnt);
+                                }
+
+                                // upsert
+                                var filter = Builders<BsonDocument>.Filter.Eq("_id", transactionId);
+                                await collection.ReplaceOneAsync(filter, doc, new ReplaceOptions { IsUpsert = true });
+
+                                transactionCount++;
                             }
-                            else
+                            catch (Exception ex)
                             {
-                                doc.Add("customerId", BsonNull.Value);
+                                _logger.LogError(ex, "Error in SyncTransactionsDirect: {Message}", ex.Message);
+                                result.RecordCounts["Transactions"] = 0;
+                                result.Success = false;
+                                result.ErrorMessage = $"Transaction sync failed: {ex.Message}";
                             }
-
-                            // Add remaining fields
-                            doc.Add("customerName", reader.IsDBNull(2) ? string.Empty : reader.GetString(2));
-                            doc.Add("totalAmount", reader.GetDecimal(3));
-                            doc.Add("paidAmount", reader.GetDecimal(4));
-                            doc.Add("transactionDate", reader.GetDateTime(5));
-
-                            // Handle enum values by converting to string
-                            int transactionTypeValue = reader.GetInt32(6);
-                            int statusValue = reader.GetInt32(7);
-                            doc.Add("transactionType", transactionTypeValue.ToString());
-                            doc.Add("status", statusValue.ToString());
-
-                            doc.Add("paymentMethod", reader.IsDBNull(8) ? string.Empty : reader.GetString(8));
-                            doc.Add("cashierId", reader.IsDBNull(9) ? string.Empty : reader.GetString(9));
-                            doc.Add("cashierName", reader.IsDBNull(10) ? string.Empty : reader.GetString(10));
-                            doc.Add("cashierRole", reader.IsDBNull(11) ? string.Empty : reader.GetString(11));
-
-                            // Get transaction details
-                            var details = await GetTransactionDetailsDirect(connection, transactionId);
-                            doc.Add("transactionDetails", details);
-
-                            // Upsert directly instead of bulk to diagnose any potential issues
-                            var filter = Builders<BsonDocument>.Filter.Eq("_id", transactionId);
-                            await collection.ReplaceOneAsync(filter, doc, new ReplaceOptions { IsUpsert = true });
-
-                            _logger.LogInformation("Successfully synced transaction {Id} with {DetailCount} details",
-                                transactionId, details.Count);
                         }
                     }
                 }
 
-                _logger.LogInformation("Successfully synced {Count} transactions", count);
-                result.RecordCounts["Transactions"] = count;
-                result.Success = true;
+                result.RecordCounts["Transactions"] = transactionCount;
+                result.Success = transactionCount > 0;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in SyncTransactionsDirect: {Message}", ex.Message);
+                _logger.LogError("Error in SyncTransactionsDirect: {Message}", ex.Message);
                 result.RecordCounts["Transactions"] = 0;
+                result.Success = false;
+            }
+        }
+
+
+
+        private string GetEnumName(Type enumType, int value)
+        {
+            try
+            {
+                return Enum.GetName(enumType, value) ?? $"Unknown({value})";
+            }
+            catch
+            {
+                return $"Invalid({value})";
             }
         }
 
         private async Task<BsonArray> GetTransactionDetailsDirect(SqlConnection connection, int transactionId)
         {
             var details = new BsonArray();
-
             try
             {
                 using (var command = connection.CreateCommand())
@@ -592,35 +633,43 @@ namespace QuickTechDataSyncService.Services
 
                     var param = new SqlParameter("@TransactionId", SqlDbType.Int) { Value = transactionId };
                     command.Parameters.Add(param);
+                    command.CommandTimeout = 60;
 
                     using (var reader = await command.ExecuteReaderAsync())
                     {
                         while (await reader.ReadAsync())
                         {
-                            var detailDoc = new BsonDocument
+                            try
                             {
-                                { "transactionDetailId", reader.GetInt32(0) },
-                                { "transactionId", reader.GetInt32(1) },
-                                { "productId", reader.GetInt32(2) },
-                                { "quantity", reader.GetDecimal(3) },
-                                { "unitPrice", reader.GetDecimal(4) },
-                                { "purchasePrice", reader.GetDecimal(5) },
-                                { "discount", reader.GetDecimal(6) },
-                                { "total", reader.GetDecimal(7) }
-                            };
+                                var detailDoc = new BsonDocument
+                                {
+                                    { "transactionDetailId", reader.GetInt32(0) },
+                                    { "transactionId", reader.GetInt32(1) },
+                                    { "productId", reader.GetInt32(2) },
+                                    { "quantity", BsonDecimal128.Create(reader.GetDecimal(3)) },
+                                    { "unitPrice", BsonDecimal128.Create(reader.GetDecimal(4)) },
+                                    { "purchasePrice", BsonDecimal128.Create(reader.GetDecimal(5)) },
+                                    { "discount", BsonDecimal128.Create(reader.GetDecimal(6)) },
+                                    { "total", BsonDecimal128.Create(reader.GetDecimal(7)) }
+                                };
 
-                            details.Add(detailDoc);
+                                details.Add(detailDoc);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Error retrieving details for transaction {TransactionId}: {Message}", transactionId, ex.Message);
+                            }
+                            return details;
                         }
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error retrieving transaction details for ID {TransactionId}: {Message}",
-                    transactionId, ex.Message);
-            }
 
-            return details;
+                return details;
+            }
+            catch (Exception)
+            {
+                return details;
+            }
         }
 
         private async Task LogSyncActivity(string deviceId, string entityType, bool success, int recordCount)
@@ -644,7 +693,7 @@ namespace QuickTechDataSyncService.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error logging sync activity");
+                _logger.LogError("Error logging sync activity: {Message}", ex.Message);
             }
         }
     }
