@@ -27,5 +27,23 @@ namespace QuickTechDataSyncService.Models
         // Helper property to get a comma-separated string of record counts
         public string RecordCountSummary => string.Join(", ",
             RecordCounts.Select(kv => $"{kv.Key}: {kv.Value}"));
+
+        // Helper method to get total modifications
+        public int GetTotalModifications()
+        {
+            int total = 0;
+            foreach (var kvp in RecordCounts)
+            {
+                if (kvp.Key.StartsWith("Deleted"))
+                {
+                    total += kvp.Value;
+                }
+                else if (!kvp.Key.Contains("Deleted"))
+                {
+                    total += kvp.Value;
+                }
+            }
+            return total;
+        }
     }
 }

@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("QuickTechDataSyncService")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a9a661a39b2bf006e03a3626a679400cb3dc6cc6")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+20619d2433fe691fca946041beaacd602341bce7")]
 [assembly: System.Reflection.AssemblyProductAttribute("QuickTechDataSyncService")]
 [assembly: System.Reflection.AssemblyTitleAttribute("QuickTechDataSyncService")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
