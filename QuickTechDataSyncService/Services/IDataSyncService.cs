@@ -12,6 +12,8 @@ namespace QuickTechDataSyncService.Services
         Task<SyncResponseDto<Supplier>> SyncSuppliersAsync(SyncRequestDto request);
         Task<SyncResponseDto<Transaction>> SyncTransactionsAsync(SyncRequestDto request);
         Task<SyncResponseDto<BusinessSetting>> SyncBusinessSettingsAsync(SyncRequestDto request);
+        Task<SyncResponseDto<Expense>> SyncExpensesAsync(SyncRequestDto request);
+        Task<SyncResponseDto<Employee>> SyncEmployeesAsync(SyncRequestDto request);
         Task<bool> LogSyncActivityAsync(string deviceId, string entityType, bool isSuccess, string? errorMessage = null, int recordsSynced = 0);
     }
 }

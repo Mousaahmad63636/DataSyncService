@@ -76,5 +76,21 @@ namespace QuickTechDataSyncService.API
         {
             return Ok(new { Status = "Online", Timestamp = DateTime.UtcNow });
         }
+
+
+        [HttpPost("expenses")]
+        public async Task<IActionResult> SyncExpenses([FromBody] SyncRequestDto request)
+        {
+            _logger.LogInformation("Expense sync requested by device {DeviceId}", request.DeviceId);
+            var result = await _dataSyncService.SyncExpensesAsync(request);
+            return Ok(result);
+        }
+        [HttpPost("employees")]
+        public async Task<IActionResult> SyncEmployees([FromBody] SyncRequestDto request)
+        {
+            _logger.LogInformation("Employee sync requested by device {DeviceId}", request.DeviceId);
+            var result = await _dataSyncService.SyncEmployeesAsync(request);
+            return Ok(result);
+        }
     }
 }

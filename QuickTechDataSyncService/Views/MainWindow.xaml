@@ -108,6 +108,8 @@
                     <Button Content="Sync Customers" Command="{Binding SyncCustomersToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
                     <Button Content="Sync Transactions" Command="{Binding SyncTransactionsToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0"/>
                     <Button Content="Sync Settings" Command="{Binding SyncSettingsToMongoDbCommand}" Padding="12,5"/>
+                    <Button Content="Sync Expenses" Command="{Binding SyncExpensesToMongoDbCommand}" Padding="12,5" Margin="0,0,10,0" RenderTransformOrigin="0.679,0.584" Width="78"/>
+                    <Button Content="Sync Employees" Command="{Binding SyncEmployeesToMongoDbCommand}" Padding="12,5"/>
                 </StackPanel>
             </StackPanel>
         </Grid>

@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "dms6y/CmVoM=",
+  "dgSpecHash": "22Y6lmxA0K0=",
   "success": true,
-  "projectFilePath": "C:\\Users\\Gundam\\Desktop\\DataSyncService v4 mango max\\DataSyncService\\QuickTechDataSyncService\\QuickTechDataSyncService.csproj",
+  "projectFilePath": "C:\\Users\\Gundam\\Desktop\\DataSyncService v5 mango max\\DataSyncService\\QuickTechDataSyncService\\QuickTechDataSyncService.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\Gundam\\.nuget\\packages\\awssdk.core\\3.7.100.14\\awssdk.core.3.7.100.14.nupkg.sha512",
     "C:\\Users\\Gundam\\.nuget\\packages\\awssdk.securitytoken\\3.7.100.14\\awssdk.securitytoken.3.7.100.14.nupkg.sha512",

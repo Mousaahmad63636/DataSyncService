@@ -80,6 +80,85 @@ namespace QuickTechDataSyncService.Services
             }
         }
 
+
+        public async Task<bool> SyncEmployeesAsync(IEnumerable<Employee> employees)
+        {
+            if (!_isInitialized)
+            {
+                _logger.LogWarning("MongoDB not initialized. Call InitializeAsync first.");
+                return false;
+            }
+            try
+            {
+                _logger.LogInformation("Starting employee sync with {Count} employees", employees.Count());
+
+                var collection = _database.GetCollection<BsonDocument>("employees");
+                var bulkOperations = new List<WriteModel<BsonDocument>>();
+
+                foreach (var employee in employees)
+                {
+                    try
+                    {
+                        var salaryTransactions = new BsonArray();
+                        foreach (var txn in employee.SalaryTransactions)
+                        {
+                            salaryTransactions.Add(new BsonDocument
+                {
+                    { "id", txn.Id },
+                    { "employeeId", txn.EmployeeId },
+                    { "amount", txn.Amount },
+                    { "transactionType", txn.TransactionType },
+                    { "transactionDate", txn.TransactionDate },
+                    { "notes", txn.Notes ?? string.Empty }
+                });
+                        }
+
+                        var employeeDoc = new BsonDocument
+            {
+                { "_id", employee.EmployeeId },
+                { "employeeId", employee.EmployeeId },
+                { "username", employee.Username },
+                { "passwordHash", employee.PasswordHash },
+                { "firstName", employee.FirstName },
+                { "lastName", employee.LastName },
+                { "role", employee.Role },
+                { "isActive", employee.IsActive },
+                { "createdAt", employee.CreatedAt },
+                { "lastLogin", employee.LastLogin.HasValue ? new BsonDateTime(employee.LastLogin.Value) : BsonNull.Value },
+                { "monthlySalary", employee.MonthlySalary },
+                { "currentBalance", employee.CurrentBalance },
+                { "salaryTransactions", salaryTransactions }
+            };
+
+                        var filter = Builders<BsonDocument>.Filter.Eq("_id", employee.EmployeeId);
+                        var upsert = new ReplaceOneModel<BsonDocument>(filter, employeeDoc) { IsUpsert = true };
+                        bulkOperations.Add(upsert);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error preparing employee {EmployeeId} for MongoDB sync: {Message}",
+                            employee.EmployeeId, ex.Message);
+                    }
+                }
+
+                if (bulkOperations.Any())
+                {
+                    var result = await collection.BulkWriteAsync(bulkOperations);
+                    _logger.LogInformation("Successfully synced {Count} employees to MongoDB", bulkOperations.Count);
+                    return true;
+                }
+                else
+                {
+                    _logger.LogWarning("No employee operations to perform");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing employees to MongoDB: {Message}", ex.Message);
+                return false;
+            }
+        }
         public async Task<List<Product>> GetProductsAsync(DateTime? lastSyncTime = null)
         {
             if (!_isInitialized)
@@ -477,6 +556,69 @@ namespace QuickTechDataSyncService.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Critical error in SyncTransactionsAsync: {Message}", ex.Message);
+                return false;
+            }
+        }
+
+
+        public async Task<bool> SyncExpensesAsync(IEnumerable<Expense> expenses)
+        {
+            if (!_isInitialized)
+            {
+                _logger.LogWarning("MongoDB not initialized. Call InitializeAsync first.");
+                return false;
+            }
+            try
+            {
+                _logger.LogInformation("Starting expense sync with {Count} expenses", expenses.Count());
+
+                var collection = _database.GetCollection<BsonDocument>("expenses");
+                var bulkOperations = new List<WriteModel<BsonDocument>>();
+
+                foreach (var expense in expenses)
+                {
+                    try
+                    {
+                        var expenseDoc = new BsonDocument
+            {
+                { "_id", expense.ExpenseId },
+                { "expenseId", expense.ExpenseId },
+                { "reason", expense.Reason },
+                { "amount", expense.Amount },
+                { "date", expense.Date },
+                { "notes", expense.Notes ?? string.Empty },
+                { "category", expense.Category },
+                { "isRecurring", expense.IsRecurring },
+                { "createdAt", expense.CreatedAt },
+                { "updatedAt", expense.UpdatedAt.HasValue ? new BsonDateTime(expense.UpdatedAt.Value) : BsonNull.Value }
+            };
+
+                        var filter = Builders<BsonDocument>.Filter.Eq("_id", expense.ExpenseId);
+                        var upsert = new ReplaceOneModel<BsonDocument>(filter, expenseDoc) { IsUpsert = true };
+                        bulkOperations.Add(upsert);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error preparing expense {ExpenseId} for MongoDB sync: {Message}",
+                            expense.ExpenseId, ex.Message);
+                    }
+                }
+
+                if (bulkOperations.Any())
+                {
+                    var result = await collection.BulkWriteAsync(bulkOperations);
+                    _logger.LogInformation("Successfully synced {Count} expenses to MongoDB", bulkOperations.Count);
+                    return true;
+                }
+                else
+                {
+                    _logger.LogWarning("No expense operations to perform");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing expenses to MongoDB: {Message}", ex.Message);
                 return false;
             }
         }

@@ -75,6 +75,264 @@ namespace QuickTechDataSyncService.Services
             }
         }
 
+        public async Task<SyncResult> SyncExpensesToMongoAsync(string deviceId)
+        {
+            var result = new SyncResult
+            {
+                StartTime = DateTime.UtcNow,
+                DeviceId = deviceId,
+                EntityType = "Expenses"
+            };
+            try
+            {
+                if (!_isInitialized)
+                {
+                    var initialized = await InitializeMongoAsync();
+                    if (!initialized)
+                    {
+                        result.Success = false;
+                        result.ErrorMessage = "Failed to initialize MongoDB";
+                        result.EndTime = DateTime.UtcNow;
+                        return result;
+                    }
+                }
+
+                var connection = _dbContext.Database.GetDbConnection() as SqlConnection;
+                if (connection.State != ConnectionState.Open)
+                {
+                    await connection.OpenAsync();
+                }
+
+                await SyncExpensesDirect(connection, result);
+
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in SyncExpensesToMongoAsync: {Message}", ex.Message);
+                result.Success = false;
+                result.ErrorMessage = $"Expense sync failed: {ex.Message}";
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+        }
+
+        public async Task<SyncResult> SyncEmployeesToMongoAsync(string deviceId)
+        {
+            var result = new SyncResult
+            {
+                StartTime = DateTime.UtcNow,
+                DeviceId = deviceId,
+                EntityType = "Employees"
+            };
+            try
+            {
+                if (!_isInitialized)
+                {
+                    var initialized = await InitializeMongoAsync();
+                    if (!initialized)
+                    {
+                        result.Success = false;
+                        result.ErrorMessage = "Failed to initialize MongoDB";
+                        result.EndTime = DateTime.UtcNow;
+                        return result;
+                    }
+                }
+
+                var connection = _dbContext.Database.GetDbConnection() as SqlConnection;
+                if (connection.State != ConnectionState.Open)
+                {
+                    await connection.OpenAsync();
+                }
+
+                await SyncEmployeesDirect(connection, result);
+
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in SyncEmployeesToMongoAsync: {Message}", ex.Message);
+                result.Success = false;
+                result.ErrorMessage = $"Employee sync failed: {ex.Message}";
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+        }
+        private async Task SyncEmployeesDirect(SqlConnection connection, SyncResult result)
+        {
+            try
+            {
+                _logger.LogInformation("Starting direct sync of employees to MongoDB");
+                var collection = _mongoDatabase.GetCollection<BsonDocument>("employees");
+                var bulkOps = new List<WriteModel<BsonDocument>>();
+                var count = 0;
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+            SELECT 
+                e.EmployeeId, e.Username, e.PasswordHash, e.FirstName, e.LastName, 
+                e.Role, e.IsActive, e.CreatedAt, e.LastLogin, e.MonthlySalary, 
+                e.CurrentBalance
+            FROM 
+                Employees e";
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            count++;
+
+                            var employeeId = reader.GetInt32(0);
+
+                            var employeeDoc = new BsonDocument
+                {
+                    { "_id", employeeId },
+                    { "employeeId", employeeId },
+                    { "username", reader.GetString(1) },
+                    { "passwordHash", reader.GetString(2) },
+                    { "firstName", reader.GetString(3) },
+                    { "lastName", reader.GetString(4) },
+                    { "role", reader.GetString(5) },
+                    { "isActive", reader.GetBoolean(6) },
+                    { "createdAt", reader.GetDateTime(7) },
+                    { "lastLogin", reader.IsDBNull(8) ? BsonNull.Value : new BsonDateTime(reader.GetDateTime(8)) },
+                    { "monthlySalary", BsonDecimal128.Create(reader.GetDecimal(9)) },
+                    { "currentBalance", BsonDecimal128.Create(reader.GetDecimal(10)) },
+                    { "salaryTransactions", new BsonArray() }
+                };
+
+                            // Fetch and add salary transactions
+                            var salaryTransactions = await GetSalaryTransactionsDirect(connection, employeeId);
+                            employeeDoc["salaryTransactions"] = salaryTransactions;
+
+                            var filter = Builders<BsonDocument>.Filter.Eq("_id", employeeId);
+                            var upsert = new ReplaceOneModel<BsonDocument>(filter, employeeDoc) { IsUpsert = true };
+                            bulkOps.Add(upsert);
+                        }
+                    }
+                }
+
+                if (bulkOps.Count > 0)
+                {
+                    var bulkResult = await collection.BulkWriteAsync(bulkOps);
+                    _logger.LogInformation("Synced {Count} employees", count);
+                }
+                else
+                {
+                    _logger.LogInformation("No employees to sync");
+                }
+
+                result.RecordCounts["Employees"] = count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in SyncEmployeesDirect: {Message}", ex.Message);
+                result.RecordCounts["Employees"] = 0;
+            }
+        }
+
+        private async Task<BsonArray> GetSalaryTransactionsDirect(SqlConnection connection, int employeeId)
+        {
+            var transactions = new BsonArray();
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+        SELECT 
+            Id, EmployeeId, Amount, TransactionType, TransactionDate, Notes
+        FROM 
+            EmployeeSalaryTransactions
+        WHERE 
+            EmployeeId = @EmployeeId";
+
+                var param = command.CreateParameter();
+                param.ParameterName = "@EmployeeId";
+                param.Value = employeeId;
+                command.Parameters.Add(param);
+
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        var txnDoc = new BsonDocument
+            {
+                { "id", reader.GetInt32(0) },
+                { "employeeId", reader.GetInt32(1) },
+                { "amount", BsonDecimal128.Create(reader.GetDecimal(2)) },
+                { "transactionType", reader.GetString(3) },
+                { "transactionDate", reader.GetDateTime(4) },
+                { "notes", reader.IsDBNull(5) ? string.Empty : reader.GetString(5) }
+            };
+
+                        transactions.Add(txnDoc);
+                    }
+                }
+            }
+
+            return transactions;
+        }
+        private async Task SyncExpensesDirect(SqlConnection connection, SyncResult result)
+        {
+            try
+            {
+                _logger.LogInformation("Starting direct sync of expenses to MongoDB");
+                var collection = _mongoDatabase.GetCollection<BsonDocument>("expenses");
+                var bulkOps = new List<WriteModel<BsonDocument>>();
+                var count = 0;
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+            SELECT 
+                ExpenseId, Reason, Amount, Date, Notes, Category, 
+                IsRecurring, CreatedAt, UpdatedAt
+            FROM 
+                Expenses";
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            count++;
+                            var doc = new BsonDocument
+                {
+                    { "_id", reader.GetInt32(0) },
+                    { "expenseId", reader.GetInt32(0) },
+                    { "reason", reader.GetString(1) },
+                    { "amount", BsonDecimal128.Create(reader.GetDecimal(2)) },
+                    { "date", reader.GetDateTime(3) },
+                    { "notes", reader.IsDBNull(4) ? string.Empty : reader.GetString(4) },
+                    { "category", reader.GetString(5) },
+                    { "isRecurring", reader.GetBoolean(6) },
+                    { "createdAt", reader.GetDateTime(7) },
+                    { "updatedAt", reader.IsDBNull(8) ? BsonNull.Value : new BsonDateTime(reader.GetDateTime(8)) }
+                };
+
+                            var filter = Builders<BsonDocument>.Filter.Eq("_id", reader.GetInt32(0));
+                            var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
+                            bulkOps.Add(upsert);
+                        }
+                    }
+                }
+
+                if (bulkOps.Count > 0)
+                {
+                    var bulkResult = await collection.BulkWriteAsync(bulkOps);
+                    _logger.LogInformation("Synced {Count} expenses", count);
+                }
+                else
+                {
+                    _logger.LogInformation("No expenses to sync");
+                }
+
+                result.RecordCounts["Expenses"] = count;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in SyncExpensesDirect: {Message}", ex.Message);
+                result.RecordCounts["Expenses"] = 0;
+            }
+        }
         public async Task<SyncResult> SyncAllDataToMongoAsync(string deviceId)
         {
             var result = new SyncResult
@@ -109,6 +367,8 @@ namespace QuickTechDataSyncService.Services
                 await SyncCustomersDirect(connection, result);
                 await SyncBusinessSettingsDirect(connection, result);
                 await SyncTransactionsDirect(connection, result);
+                await SyncExpensesDirect(connection, result);
+                await SyncEmployeesDirect(connection, result);
 
                 await LogSyncActivity(deviceId, "All", true, result.RecordCounts.Values.Sum());
 
@@ -180,6 +440,14 @@ namespace QuickTechDataSyncService.Services
                     default:
                         result.Success = false;
                         result.ErrorMessage = $"Unknown entity type: {entityType}";
+                        break;
+
+                    case "expenses":
+                        await SyncExpensesDirect(connection, result);
+                        break;
+
+                    case "employees":
+                        await SyncEmployeesDirect(connection, result);
                         break;
                 }
 

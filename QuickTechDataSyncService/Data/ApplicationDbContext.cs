@@ -18,6 +18,8 @@ namespace QuickTechDataSyncService.Data
         public DbSet<TransactionDetail> TransactionDetails => Set<TransactionDetail>();
         public DbSet<BusinessSetting> BusinessSettings => Set<BusinessSetting>();
         public DbSet<SyncLog> SyncLogs => Set<SyncLog>();
+        public DbSet<Expense> Expenses => Set<Expense>();
+        public DbSet<Employee> Employees => Set<Employee>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

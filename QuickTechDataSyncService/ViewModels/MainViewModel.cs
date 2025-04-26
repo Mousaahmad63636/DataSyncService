@@ -96,6 +96,8 @@ namespace QuickTechDataSyncService.ViewModels
         public ICommand SyncCustomersToMongoDbCommand { get; }
         public ICommand SyncTransactionsToMongoDbCommand { get; }
         public ICommand SyncSettingsToMongoDbCommand { get; }
+        public ICommand SyncExpensesToMongoDbCommand { get; }
+        public ICommand SyncEmployeesToMongoDbCommand { get; }
 
         public MainViewModel(ILogger<MainViewModel> logger = null)
         {
@@ -114,6 +116,8 @@ namespace QuickTechDataSyncService.ViewModels
             SyncCustomersToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Customers"), () => !IsSyncing);
             SyncTransactionsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Transactions"), () => !IsSyncing);
             SyncSettingsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Business_Settings"), () => !IsSyncing);
+            SyncExpensesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Expenses"), () => !IsSyncing);
+            SyncEmployeesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Employees"), () => !IsSyncing);
 
             AddLogMessage("Application started. Click 'Start Server' to begin serving requests.");
         }

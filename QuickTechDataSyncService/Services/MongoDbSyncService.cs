@@ -88,6 +88,75 @@ namespace QuickTechDataSyncService.Services
             }
         }
 
+        public async Task<SyncResult> SyncExpensesToMongoAsync(string deviceId)
+        {
+            var result = new SyncResult
+            {
+                StartTime = DateTime.UtcNow,
+                DeviceId = deviceId,
+                EntityType = "Expenses"
+            };
+            try
+            {
+                _logger.LogInformation("Starting sync of expenses to MongoDB");
+                var expenses = await _dbContext.Expenses
+                    .AsNoTracking()
+                    .ToListAsync();
+                var success = await _mongoDbService.SyncExpensesAsync(expenses);
+                result.RecordCounts["Expenses"] = expenses.Count;
+                _logger.LogInformation("Expenses synced: {Count}", expenses.Count);
+
+                await _mongoDbService.LogSyncActivityAsync(deviceId, "Expenses", success, expenses.Count);
+
+                result.Success = success;
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing expenses");
+                result.RecordCounts["Expenses"] = 0;
+                result.Success = false;
+                result.ErrorMessage = ex.Message;
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+        }
+        public async Task<SyncResult> SyncEmployeesToMongoAsync(string deviceId)
+        {
+            var result = new SyncResult
+            {
+                StartTime = DateTime.UtcNow,
+                DeviceId = deviceId,
+                EntityType = "Employees"
+            };
+            try
+            {
+                _logger.LogInformation("Starting sync of employees to MongoDB");
+                var employees = await _dbContext.Employees
+                    .Include(e => e.SalaryTransactions)
+                    .AsNoTracking()
+                    .ToListAsync();
+                var success = await _mongoDbService.SyncEmployeesAsync(employees);
+                result.RecordCounts["Employees"] = employees.Count;
+                _logger.LogInformation("Employees synced: {Count}", employees.Count);
+
+                await _mongoDbService.LogSyncActivityAsync(deviceId, "Employees", success, employees.Count);
+
+                result.Success = success;
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error syncing employees");
+                result.RecordCounts["Employees"] = 0;
+                result.Success = false;
+                result.ErrorMessage = ex.Message;
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+        }
         private async Task SyncCategoriesAsync(SyncResult result)
         {
             try

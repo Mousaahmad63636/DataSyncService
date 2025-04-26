@@ -53,7 +53,16 @@ namespace QuickTechDataSyncService.Services
         {
             return await SyncEntityAsync<BusinessSetting>(request, b => b.LastModified >= request.LastSyncTime);
         }
-
+        public async Task<SyncResponseDto<Expense>> SyncExpensesAsync(SyncRequestDto request)
+        {
+            return await SyncEntityAsync<Expense>(request, e => e.UpdatedAt == null || e.UpdatedAt >= request.LastSyncTime);
+        }
+        public async Task<SyncResponseDto<Employee>> SyncEmployeesAsync(SyncRequestDto request)
+        {
+            return await SyncEntityAsync<Employee>(request,
+            e => e.CreatedAt >= request.LastSyncTime, // Use CreatedAt instead of UpdatedAt
+            e => e.Include(x => x.SalaryTransactions));
+        }
         public async Task<bool> LogSyncActivityAsync(string deviceId, string entityType, bool isSuccess, string? errorMessage = null, int recordsSynced = 0)
         {
             try
