@@ -376,7 +376,6 @@ namespace QuickTechDataSyncService.Services
             }
         }
 
-        // This is a completely manual approach to bypass Entity Framework for transactions
         private async Task<SyncResult> SyncTransactionsManuallyAsync(string deviceId)
         {
             var result = new SyncResult
@@ -404,15 +403,16 @@ namespace QuickTechDataSyncService.Services
                 // Direct SQL approach instead of Entity Framework
                 using (var command = connection.CreateCommand())
                 {
-                    // Get a few transactions with details
+                    // Get transactions from current day
                     command.CommandText = @"
-                        SELECT TOP 10 
-                            t.TransactionId, t.CustomerId, t.CustomerName, 
-                            t.TotalAmount, t.PaidAmount, t.TransactionDate, 
-                            t.TransactionType, t.Status, t.PaymentMethod,
-                            t.CashierId, t.CashierName, t.CashierRole
-                        FROM Transactions t
-                        ORDER BY t.TransactionDate DESC";
+                SELECT 
+                    t.TransactionId, t.CustomerId, t.CustomerName, 
+                    t.TotalAmount, t.PaidAmount, t.TransactionDate, 
+                    t.TransactionType, t.Status, t.PaymentMethod,
+                    t.CashierId, t.CashierName, t.CashierRole
+                FROM Transactions t
+                WHERE CONVERT(date, t.TransactionDate) = CONVERT(date, GETDATE())
+                ORDER BY t.TransactionDate DESC";
 
                     var reader = await command.ExecuteReaderAsync();
                     var transactionCount = 0;
@@ -469,11 +469,11 @@ namespace QuickTechDataSyncService.Services
                         using (var detailsCommand = connection.CreateCommand())
                         {
                             detailsCommand.CommandText = @"
-                                SELECT 
-                                    TransactionDetailId, TransactionId, ProductId, 
-                                    Quantity, UnitPrice, PurchasePrice, Discount, Total
-                                FROM TransactionDetails
-                                WHERE TransactionId = @TransactionId";
+                        SELECT 
+                            TransactionDetailId, TransactionId, ProductId, 
+                            Quantity, UnitPrice, PurchasePrice, Discount, Total
+                        FROM TransactionDetails
+                        WHERE TransactionId = @TransactionId";
 
                             var param = detailsCommand.CreateParameter();
                             param.ParameterName = "@TransactionId";

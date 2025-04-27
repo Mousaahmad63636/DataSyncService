@@ -1036,11 +1036,11 @@ namespace QuickTechDataSyncService.Services
                     }
                 }
 
-                // Get all SQL transaction IDs (limited to recent ones to avoid performance issues)
+                // Get all SQL transaction IDs for today
                 var sqlTransactionIds = new HashSet<int>();
                 using (var command = connection.CreateCommand())
                 {
-                    command.CommandText = "SELECT TOP 100 TransactionId FROM Transactions ORDER BY TransactionDate DESC";
+                    command.CommandText = "SELECT TransactionId FROM Transactions WHERE CONVERT(date, TransactionDate) = CONVERT(date, GETDATE())";
                     using (var reader = await command.ExecuteReaderAsync())
                     {
                         while (await reader.ReadAsync())
@@ -1051,8 +1051,6 @@ namespace QuickTechDataSyncService.Services
                 }
 
                 // Identify transactions to delete (in MongoDB but not in SQL)
-                // Only delete transactions that were in our recent set but are no longer there
-                // This prevents deleting historical transactions
                 var transactionsToDelete = mongoTransactionIds.Where(id => sqlTransactionIds.Contains(id) == false && mongoTransactionIds.Contains(id)).ToList();
                 if (transactionsToDelete.Any())
                 {
@@ -1065,12 +1063,13 @@ namespace QuickTechDataSyncService.Services
                 using (var command = connection.CreateCommand())
                 {
                     command.CommandText = @"
-                SELECT TOP 20
-                    TransactionId, CustomerId, CustomerName, TotalAmount, PaidAmount, 
-                    TransactionDate, TransactionType, Status, PaymentMethod, 
-                    CashierId, CashierName, CashierRole
-                FROM Transactions
-                ORDER BY TransactionDate DESC";
+            SELECT 
+                TransactionId, CustomerId, CustomerName, TotalAmount, PaidAmount, 
+                TransactionDate, TransactionType, Status, PaymentMethod, 
+                CashierId, CashierName, CashierRole
+            FROM Transactions
+            WHERE CONVERT(date, TransactionDate) = CONVERT(date, GETDATE())
+            ORDER BY TransactionDate DESC";
                     command.CommandTimeout = 120;
 
                     using (var reader = await command.ExecuteReaderAsync())
@@ -1082,10 +1081,10 @@ namespace QuickTechDataSyncService.Services
                             try
                             {
                                 var doc = new BsonDocument
-                                {
-                                    { "_id", transactionId },
-                                    { "transactionId", transactionId }
-                                };
+                        {
+                            { "_id", transactionId },
+                            { "transactionId", transactionId }
+                        };
 
                                 // customerId (nullable int)
                                 if (!reader.IsDBNull(1))

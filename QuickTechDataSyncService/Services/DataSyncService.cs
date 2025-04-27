@@ -45,7 +45,9 @@ namespace QuickTechDataSyncService.Services
 
         public async Task<SyncResponseDto<Transaction>> SyncTransactionsAsync(SyncRequestDto request)
         {
-            return await SyncEntityAsync<Transaction>(request, t => t.TransactionDate >= request.LastSyncTime,
+            return await SyncEntityAsync<Transaction>(
+                request,
+                t => t.TransactionDate.Date == DateTime.Today || (request.LastSyncTime.HasValue && t.TransactionDate >= request.LastSyncTime),
                 q => q.Include(t => t.TransactionDetails));
         }
 

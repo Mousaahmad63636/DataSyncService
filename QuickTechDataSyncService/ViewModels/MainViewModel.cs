@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -30,6 +31,9 @@ namespace QuickTechDataSyncService.ViewModels
         private bool _isSyncing = false;
         private readonly ILogger<MainViewModel> _logger;
         private string _deviceId = $"Desktop-{Environment.MachineName}";
+        private Timer _autoSyncTimer;
+        private readonly TimeSpan _syncInterval = TimeSpan.FromMinutes(5);
+        private bool _isAutoSyncEnabled = false;
 
         public string ServerStatus
         {
@@ -85,6 +89,12 @@ namespace QuickTechDataSyncService.ViewModels
             set => SetProperty(ref _deviceId, value);
         }
 
+        public bool IsAutoSyncEnabled
+        {
+            get => _isAutoSyncEnabled;
+            set => SetProperty(ref _isAutoSyncEnabled, value);
+        }
+
         public ICommand StartServerCommand { get; }
         public ICommand StopServerCommand { get; }
         public ICommand TestConnectionCommand { get; }
@@ -119,7 +129,11 @@ namespace QuickTechDataSyncService.ViewModels
             SyncExpensesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Expenses"), () => !IsSyncing);
             SyncEmployeesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Employees"), () => !IsSyncing);
 
-            AddLogMessage("Application started. Click 'Start Server' to begin serving requests.");
+            AddLogMessage("Application started. Initializing automatic synchronization...");
+
+            _autoSyncTimer = new Timer(async _ => await RunAutoSyncAsync(), null, Timeout.Infinite, Timeout.Infinite);
+
+            StartAutoSync();
         }
 
         private ILogger<MainViewModel> CreateDefaultLogger()
@@ -135,6 +149,103 @@ namespace QuickTechDataSyncService.ViewModels
 
             return loggerFactory.CreateLogger<MainViewModel>();
         }
+
+        private void StartAutoSync()
+        {
+            if (IsAutoSyncEnabled) return;
+
+            AddLogMessage("Starting automatic synchronization service...");
+
+            InitializeDatabasesAndStartSync();
+        }
+
+        private async void InitializeDatabasesAndStartSync()
+        {
+            try
+            {
+                AddLogMessage("Testing SQL Server connection...");
+                await _host.StartAsync();
+
+                var dbContext = _host.Services.GetRequiredService<Data.ApplicationDbContext>();
+                var canConnect = await dbContext.Database.CanConnectAsync();
+
+                if (!canConnect)
+                {
+                    AddLogMessage("ERROR: Cannot connect to SQL Server database. Auto-sync will not start.");
+                    return;
+                }
+
+                ConnectionStatus = "Connected";
+                AddLogMessage("SQL Server connection successful");
+
+                AddLogMessage("Initializing MongoDB connection...");
+                var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
+                var mongoInitialized = await mongoService.InitializeMongoAsync();
+
+                if (!mongoInitialized)
+                {
+                    AddLogMessage("ERROR: Cannot connect to MongoDB. Auto-sync will not start.");
+                    return;
+                }
+
+                MongoStatus = "Connected";
+                IsMongoInitialized = true;
+                AddLogMessage("MongoDB connection successful");
+
+                IsServerRunning = true;
+                ServerStatus = "Running";
+
+                var server = _host.Services.GetRequiredService<IServer>();
+                var addressFeature = server.Features.Get<IServerAddressesFeature>();
+                ServerUrl = addressFeature?.Addresses.FirstOrDefault() ?? "http://localhost:5000";
+
+                await RunAutoSyncAsync();
+
+                _autoSyncTimer.Change(TimeSpan.Zero, _syncInterval);
+
+                IsAutoSyncEnabled = true;
+                AddLogMessage($"Automatic synchronization service started. Data will sync every {_syncInterval.TotalMinutes} minutes.");
+            }
+            catch (Exception ex)
+            {
+                AddLogMessage($"ERROR: Failed to initialize databases: {ex.Message}");
+            }
+        }
+
+        private async Task RunAutoSyncAsync()
+        {
+            try
+            {
+                AddLogMessage("Starting scheduled data synchronization...");
+
+                IsSyncing = true;
+
+                var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
+
+                var result = await mongoService.SyncAllDataToMongoAsync(DeviceId);
+
+                if (result.Success)
+                {
+                    var summary = string.Join(", ", result.RecordCounts.Select(kv => $"{kv.Key}: {kv.Value}"));
+                    AddLogMessage($"Scheduled sync completed successfully in {result.Duration.TotalSeconds:F2}s. Records: {summary}");
+                }
+                else
+                {
+                    AddLogMessage($"Scheduled sync failed: {result.ErrorMessage}");
+                }
+
+                AddLogMessage($"Next synchronization scheduled in {_syncInterval.TotalMinutes} minutes");
+            }
+            catch (Exception ex)
+            {
+                AddLogMessage($"ERROR during scheduled sync: {ex.Message}");
+            }
+            finally
+            {
+                IsSyncing = false;
+            }
+        }
+
         private async void StartServer()
         {
             try
@@ -221,7 +332,6 @@ namespace QuickTechDataSyncService.ViewModels
                     IsMongoInitialized = true;
                     AddLogMessage("MongoDB initialized successfully");
 
-                    // Raise property changed for IsMongoInitialized
                     OnPropertyChanged(nameof(IsMongoInitialized));
                 }
                 else
@@ -238,6 +348,7 @@ namespace QuickTechDataSyncService.ViewModels
                 AddLogMessage($"MongoDB initialization error: {ex.Message}");
             }
         }
+
         private async void SyncAllToMongoDb()
         {
             if (IsSyncing) return;
@@ -289,7 +400,6 @@ namespace QuickTechDataSyncService.ViewModels
                 }
                 else
                 {
-                    // More detailed error reporting
                     string errorDetails = !string.IsNullOrEmpty(result.ErrorMessage)
                         ? result.ErrorMessage
                         : "Unknown error occurred";
@@ -299,7 +409,6 @@ namespace QuickTechDataSyncService.ViewModels
             }
             catch (Exception ex)
             {
-                // Enhanced exception logging
                 AddLogMessage($"Error during {entityType} sync: {ex.Message}");
             }
             finally
@@ -307,6 +416,7 @@ namespace QuickTechDataSyncService.ViewModels
                 IsSyncing = false;
             }
         }
+
         public void AddLogMessage(string message)
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -322,6 +432,12 @@ namespace QuickTechDataSyncService.ViewModels
 
         public async Task ShutdownAsync()
         {
+            if (_autoSyncTimer != null)
+            {
+                _autoSyncTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                _autoSyncTimer.Dispose();
+            }
+
             if (IsServerRunning)
             {
                 await _host.StopAsync();
