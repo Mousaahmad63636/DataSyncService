@@ -1,0 +1,34 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net8.0-windows</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<UseWPF>true</UseWPF>
+		<StartupObject>QuickTechDataSyncService.Program</StartupObject>
+	</PropertyGroup>
+	<ItemGroup>
+	  <Compile Remove="converters\**" />
+	  <EmbeddedResource Remove="converters\**" />
+	  <None Remove="converters\**" />
+	  <Page Remove="converters\**" />
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="FirebaseAdmin" Version="2.4.0" />
+		<PackageReference Include="Google.Cloud.Firestore" Version="3.8.0" />
+		<PackageReference Include="Google.Cloud.Storage.V1" Version="4.8.0" />
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.0" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.0" />
+		<PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+		<PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+		<PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
+		<PackageReference Include="MongoDB.Driver" Version="2.22.0" />
+	</ItemGroup>
+	<ItemGroup>
+		<None Update="appsettings.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+	</ItemGroup>
+</Project>
