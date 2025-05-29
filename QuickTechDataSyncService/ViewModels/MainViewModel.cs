@@ -216,7 +216,7 @@ namespace QuickTechDataSyncService.ViewModels
         {
             try
             {
-                AddLogMessage("Starting scheduled data synchronization...");
+                AddLogMessage("Starting scheduled incremental synchronization...");
 
                 IsSyncing = true;
 
@@ -226,15 +226,23 @@ namespace QuickTechDataSyncService.ViewModels
 
                 if (result.Success)
                 {
-                    var summary = string.Join(", ", result.RecordCounts.Select(kv => $"{kv.Key}: {kv.Value}"));
-                    AddLogMessage($"Scheduled sync completed successfully in {result.Duration.TotalSeconds:F2}s. Records: {summary}");
+                    var summary = string.Join(", ", result.RecordCounts.Where(kv => kv.Value > 0).Select(kv => $"{kv.Key}: {kv.Value}"));
+
+                    if (result.RecordCounts.Values.Sum() > 0)
+                    {
+                        AddLogMessage($"Incremental sync completed in {result.Duration.TotalSeconds:F2}s. Updated: {summary}");
+                    }
+                    else
+                    {
+                        AddLogMessage($"No changes detected. Sync completed in {result.Duration.TotalSeconds:F2}s");
+                    }
                 }
                 else
                 {
                     AddLogMessage($"Scheduled sync failed: {result.ErrorMessage}");
                 }
 
-                AddLogMessage($"Next synchronization scheduled in {_syncInterval.TotalMinutes} minutes");
+                AddLogMessage($"Next synchronization in {_syncInterval.TotalMinutes} minutes");
             }
             catch (Exception ex)
             {

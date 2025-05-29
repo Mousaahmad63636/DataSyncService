@@ -34,8 +34,10 @@ namespace QuickTechDataSyncService.Models
         public string CashierId { get; set; } = string.Empty;
         public string CashierName { get; set; } = string.Empty;
         public string CashierRole { get; set; } = string.Empty;
+        public DateTime CreatedDate { get; set; } = DateTime.UtcNow;
+        public DateTime ModifiedDate { get; set; } = DateTime.UtcNow;
+        public bool IsDeleted { get; set; } = false;
 
-        // Navigation properties
         public virtual Customer? Customer { get; set; }
         public virtual ICollection<TransactionDetail> TransactionDetails { get; set; } = new List<TransactionDetail>();
     }
