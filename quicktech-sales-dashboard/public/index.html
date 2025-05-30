@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#2c3e50">
+    <title>لوحة مبيعات كويك تك</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>إدارة مطعم أبن البلد</h1>
+        </header>
+
+        <div class="filter-section">
+            <div class="period-filter">
+                <button data-period="today" class="active">اليوم</button>
+                <button data-period="week">الأسبوع</button>
+                <button data-period="month">الشهر</button>
+            </div>
+            <div class="date-filter">
+                <input type="date" id="date">
+            </div>
+        </div>
+
+        <div class="employee-filter-container">
+            <div class="employee-filter">
+                <label for="employee-select">الموظف:</label>
+                <select id="employee-select">
+                    <option value="all">جميع الموظفين</option>
+                    <!-- Will be populated dynamically -->
+                </select>
+            </div>
+        </div>
+
+        <div class="summary-section">
+            <div class="summary-card" id="total-sales">
+                <h2>إجمالي المبيعات</h2>
+                <p class="value">$0.00</p>
+            </div>
+            <div class="summary-card" id="total-expense">
+                <h2>إجمالي المصروفات</h2>
+                <p class="value">$0.00</p>
+            </div>
+            <div class="summary-card" id="total-profit">
+                <h2>صافي الربح</h2>
+                <p class="value">$0.00</p>
+            </div>
+            <div class="summary-card" id="total-transactions">
+                <h2>عدد المعاملات</h2>
+                <p class="value">0</p>
+            </div>
+        </div>
+
+        <div class="transactions-section">
+            <h2>المعاملات</h2>
+            <div class="loading" id="loading">جاري التحميل...</div>
+            <div class="error" id="error"></div>
+            <div class="no-data" id="no-data">لا توجد معاملات لهذا التاريخ.</div>
+            
+            <!-- Traditional table (hidden on mobile) -->
+            <table id="transactions-table">
+                <thead>
+                    <tr>
+                        <th>رقم</th>
+                        <th>العميل</th>
+                        <th>الموظف</th>
+                        <th>المبلغ</th>
+                    </tr>
+                </thead>
+                <tbody id="transactions-body">
+                </tbody>
+            </table>
+            
+            <!-- Mobile card layout -->
+            <div class="transaction-cards" id="transaction-cards">
+                <!-- Will be populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>© 2025 أنظمة كويك تك</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
