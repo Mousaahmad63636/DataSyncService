@@ -6,12 +6,14 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<UseWPF>true</UseWPF>
 		<StartupObject>QuickTechDataSyncService.Program</StartupObject>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<SelfContained>true</SelfContained>
 	</PropertyGroup>
 	<ItemGroup>
-	  <Compile Remove="converters\**" />
-	  <EmbeddedResource Remove="converters\**" />
-	  <None Remove="converters\**" />
-	  <Page Remove="converters\**" />
+		<Compile Remove="converters\**" />
+		<EmbeddedResource Remove="converters\**" />
+		<None Remove="converters\**" />
+		<Page Remove="converters\**" />
 	</ItemGroup>
 	<ItemGroup>
 		<PackageReference Include="FirebaseAdmin" Version="2.4.0" />

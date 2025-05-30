@@ -32,7 +32,7 @@ namespace QuickTechDataSyncService.ViewModels
         private readonly ILogger<MainViewModel> _logger;
         private string _deviceId = $"Desktop-{Environment.MachineName}";
         private Timer _autoSyncTimer;
-        private readonly TimeSpan _syncInterval = TimeSpan.FromMinutes(5);
+        private readonly TimeSpan _syncInterval = TimeSpan.FromMinutes(2);
         private bool _isAutoSyncEnabled = false;
 
         public string ServerStatus
