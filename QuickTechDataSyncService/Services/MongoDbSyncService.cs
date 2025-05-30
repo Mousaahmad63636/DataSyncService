@@ -87,7 +87,34 @@ namespace QuickTechDataSyncService.Services
                 return result;
             }
         }
+        public async Task<SyncResult> BulkSyncTransactionsAsync(string deviceId, Action<string> progressCallback = null)
+        {
+            var result = new SyncResult
+            {
+                StartTime = DateTime.UtcNow,
+                DeviceId = deviceId,
+                EntityType = "BulkTransactions"
+            };
 
+            try
+            {
+                progressCallback?.Invoke("Bulk sync not implemented in MongoDbService. Use DirectMongoDbService instead.");
+
+                result.Success = false;
+                result.ErrorMessage = "Bulk sync is only available in DirectMongoDbService";
+                result.EndTime = DateTime.UtcNow;
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in bulk sync: {Message}", ex.Message);
+                result.Success = false;
+                result.ErrorMessage = ex.Message;
+                result.EndTime = DateTime.UtcNow;
+                return result;
+            }
+        }
         public async Task<SyncResult> SyncExpensesToMongoAsync(string deviceId)
         {
             var result = new SyncResult

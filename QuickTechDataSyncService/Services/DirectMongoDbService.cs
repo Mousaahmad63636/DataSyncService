@@ -76,6 +76,260 @@ namespace QuickTechDataSyncService.Services
             }
         }
 
+        public async Task<SyncResult> BulkSyncTransactionsAsync(string deviceId, Action<string> progressCallback = null)
+        {
+            var result = new SyncResult
+            {
+                StartTime = DateTime.UtcNow,
+                DeviceId = deviceId,
+                EntityType = "BulkTransactions"
+            };
+
+            try
+            {
+                if (!_isInitialized)
+                {
+                    var initialized = await InitializeMongoAsync();
+                    if (!initialized)
+                    {
+                        result.Success = false;
+                        result.ErrorMessage = "Failed to initialize MongoDB";
+                        result.EndTime = DateTime.UtcNow;
+                        return result;
+                    }
+                }
+
+                var connection = _dbContext.Database.GetDbConnection() as SqlConnection;
+                if (connection.State != ConnectionState.Open)
+                {
+                    await connection.OpenAsync();
+                }
+
+                progressCallback?.Invoke("Getting date range for bulk sync...");
+
+                // Get date range of transactions
+                var (startDate, endDate, totalCount) = await GetTransactionDateRange(connection);
+
+                if (totalCount == 0)
+                {
+                    progressCallback?.Invoke("No transactions found to sync");
+                    result.Success = true;
+                    result.RecordCounts["Transactions"] = 0;
+                    result.EndTime = DateTime.UtcNow;
+                    return result;
+                }
+
+                progressCallback?.Invoke($"Found {totalCount} transactions from {startDate:yyyy-MM-dd} to {endDate:yyyy-MM-dd}");
+
+                var collection = _mongoDatabase.GetCollection<BsonDocument>("transactions");
+                int processedCount = 0;
+
+                // Process in weekly chunks
+                var currentDate = startDate;
+                while (currentDate <= endDate)
+                {
+                    var chunkEndDate = currentDate.AddDays(7);
+                    if (chunkEndDate > endDate) chunkEndDate = endDate.AddDays(1); // Include end date
+
+                    progressCallback?.Invoke($"Processing week: {currentDate:yyyy-MM-dd} to {chunkEndDate.AddDays(-1):yyyy-MM-dd}");
+
+                    var chunkCount = await ProcessTransactionChunk(connection, collection, currentDate, chunkEndDate);
+                    processedCount += chunkCount;
+
+                    var progressPercent = (int)((double)processedCount / totalCount * 100);
+                    progressCallback?.Invoke($"Progress: {processedCount}/{totalCount} ({progressPercent}%) - Processed {chunkCount} transactions");
+
+                    // Update checkpoint
+                    await UpdateBulkSyncCheckpoint(deviceId, currentDate, processedCount);
+
+                    currentDate = chunkEndDate;
+
+                    // Small delay to prevent overwhelming the system
+                    await Task.Delay(1000);
+                }
+
+                // Mark bulk sync as completed
+                await MarkBulkSyncCompleted(deviceId);
+
+                result.Success = true;
+                result.RecordCounts["Transactions"] = processedCount;
+                result.EndTime = DateTime.UtcNow;
+
+                progressCallback?.Invoke($"Bulk sync completed: {processedCount} transactions in {result.Duration.TotalMinutes:F1} minutes");
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in bulk sync: {Message}", ex.Message);
+                result.Success = false;
+                result.ErrorMessage = ex.Message;
+                result.EndTime = DateTime.UtcNow;
+                progressCallback?.Invoke($"Bulk sync failed: {ex.Message}");
+                return result;
+            }
+        }
+
+        private async Task<(DateTime startDate, DateTime endDate, int totalCount)> GetTransactionDateRange(SqlConnection connection)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+                    SELECT 
+                        MIN(TransactionDate) as StartDate,
+                        MAX(TransactionDate) as EndDate,
+                        COUNT(*) as TotalCount
+                    FROM Transactions";
+
+                command.CommandTimeout = 60;
+
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    if (await reader.ReadAsync())
+                    {
+                        var startDate = reader.IsDBNull(0) ? DateTime.Today : reader.GetDateTime(0).Date;
+                        var endDate = reader.IsDBNull(1) ? DateTime.Today : reader.GetDateTime(1).Date;
+                        var totalCount = reader.GetInt32(2);
+
+                        return (startDate, endDate, totalCount);
+                    }
+                }
+            }
+
+            return (DateTime.Today, DateTime.Today, 0);
+        }
+
+        private async Task<int> ProcessTransactionChunk(SqlConnection connection, IMongoCollection<BsonDocument> collection, DateTime startDate, DateTime endDate)
+        {
+            var bulkOps = new List<WriteModel<BsonDocument>>();
+            int chunkCount = 0;
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+    SELECT 
+        TransactionId, CustomerId, CustomerName, TotalAmount, PaidAmount, 
+        TransactionDate, TransactionType, Status
+    FROM Transactions
+    WHERE TransactionDate >= @StartDate
+    ORDER BY TransactionDate DESC";
+
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        chunkCount++;
+                        var transactionId = reader.GetInt32(0);
+
+                        try
+                        {
+                            var doc = new BsonDocument
+                            {
+                                { "_id", transactionId },
+                                { "transactionId", transactionId }
+                            };
+
+                            if (!reader.IsDBNull(1))
+                                doc.Add("customerId", reader.GetInt32(1));
+                            else
+                                doc.Add("customerId", BsonNull.Value);
+
+                            doc.Add("customerName", reader.IsDBNull(2) ? string.Empty : reader.GetString(2));
+                            doc.Add("totalAmount", BsonDecimal128.Create(reader.GetDecimal(3)));
+                            doc.Add("paidAmount", BsonDecimal128.Create(reader.GetDecimal(4)));
+                            doc.Add("transactionDate", reader.GetDateTime(5).ToUniversalTime());
+                            doc.Add("transactionType", reader.GetString(6));
+                            doc.Add("status", reader.GetString(7));
+                            doc.Add("bulkSyncedAt", DateTime.UtcNow);
+
+                            // Get transaction details
+                            var details = await GetTransactionDetailsDirect(connection, transactionId);
+                            doc.Add("transactionDetails", details);
+
+                            var filter = Builders<BsonDocument>.Filter.Eq("_id", transactionId);
+                            var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
+                            bulkOps.Add(upsert);
+
+                            // Process in batches of 500
+                            if (bulkOps.Count >= 500)
+                            {
+                                await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
+                                bulkOps.Clear();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Error processing transaction {TransactionId} in bulk sync", transactionId);
+                        }
+                    }
+                }
+            }
+
+            // Process remaining transactions
+            if (bulkOps.Count > 0)
+            {
+                await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
+            }
+
+            return chunkCount;
+        }
+
+        private async Task UpdateBulkSyncCheckpoint(string deviceId, DateTime processedDate, int processedCount)
+        {
+            try
+            {
+                var checkpoint = await _dbContext.SyncCheckpoints
+                    .FirstOrDefaultAsync(sc => sc.DeviceId == deviceId && sc.EntityType == "BulkTransactions");
+
+                if (checkpoint == null)
+                {
+                    checkpoint = new SyncCheckpoint
+                    {
+                        DeviceId = deviceId,
+                        EntityType = "BulkTransactions",
+                        LastSyncTime = processedDate,
+                        LastRecordId = processedCount,
+                        CheckpointData = $"ProcessedDate:{processedDate:yyyy-MM-dd}",
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    _dbContext.SyncCheckpoints.Add(checkpoint);
+                }
+                else
+                {
+                    checkpoint.LastSyncTime = processedDate;
+                    checkpoint.LastRecordId = processedCount;
+                    checkpoint.CheckpointData = $"ProcessedDate:{processedDate:yyyy-MM-dd}";
+                    checkpoint.UpdatedAt = DateTime.UtcNow;
+                }
+
+                await _dbContext.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating bulk sync checkpoint");
+            }
+        }
+
+        private async Task MarkBulkSyncCompleted(string deviceId)
+        {
+            try
+            {
+                var checkpoint = await _dbContext.SyncCheckpoints
+                    .FirstOrDefaultAsync(sc => sc.DeviceId == deviceId && sc.EntityType == "BulkTransactions");
+
+                if (checkpoint != null)
+                {
+                    checkpoint.CheckpointData = "COMPLETED";
+                    checkpoint.UpdatedAt = DateTime.UtcNow;
+                    await _dbContext.SaveChangesAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error marking bulk sync as completed");
+            }
+        }
+
         private async Task<SyncCheckpoint?> GetSyncCheckpoint(string deviceId, string entityType)
         {
             try
@@ -128,190 +382,99 @@ namespace QuickTechDataSyncService.Services
             }
         }
 
-        private async Task<int> SyncDeletedTransactions(SqlConnection connection, IMongoCollection<BsonDocument> collection, DateTime lastSyncTime)
+        private async Task SyncTransactionsDirect(SqlConnection connection, SyncResult result)
         {
             try
             {
-                var deletedIds = new List<int>();
+                _logger.LogInformation("Starting INCREMENTAL transaction sync to MongoDB");
+                var collection = _mongoDatabase.GetCollection<BsonDocument>("transactions");
+
+                // Check if bulk sync is completed
+                var bulkCheckpoint = await GetSyncCheckpoint(result.DeviceId, "BulkTransactions");
+                var isBulkCompleted = bulkCheckpoint?.CheckpointData == "COMPLETED";
+
+                DateTime startDate;
+                if (isBulkCompleted)
+                {
+                    // Only sync last 3 days for incremental updates
+                    startDate = DateTime.Today.AddDays(-3);
+                    _logger.LogInformation("Bulk sync completed. Syncing incremental transactions from last 3 days.");
+                }
+                else
+                {
+                    // If no bulk sync, get recent transactions (last 7 days)
+                    startDate = DateTime.Today.AddDays(-7);
+                    _logger.LogInformation("No bulk sync detected. Syncing recent transactions from last 7 days.");
+                }
+
+                int totalCount = 0;
+                var bulkOps = new List<WriteModel<BsonDocument>>();
 
                 using (var command = connection.CreateCommand())
                 {
                     command.CommandText = @"
-                        SELECT TransactionId 
-                        FROM Transactions 
-                        WHERE IsDeleted = 1 AND ModifiedDate > @LastSyncTime";
+                        SELECT 
+                            TransactionId, CustomerId, CustomerName, TotalAmount, PaidAmount, 
+                            TransactionDate, TransactionType, Status, PaidAmount
+                        FROM Transactions
+                        WHERE TransactionDate >= @StartDate
+                        ORDER BY TransactionDate DESC";
 
-                    command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
-                    command.CommandTimeout = 120;
+                    command.Parameters.Add(new SqlParameter("@StartDate", startDate));
+                    command.CommandTimeout = 300;
 
                     using (var reader = await command.ExecuteReaderAsync())
                     {
                         while (await reader.ReadAsync())
                         {
-                            deletedIds.Add(reader.GetInt32(0));
-                        }
-                    }
-                }
+                            totalCount++;
+                            var transactionId = reader.GetInt32(0);
 
-                if (deletedIds.Any())
-                {
-                    var deleteFilter = Builders<BsonDocument>.Filter.In("_id", deletedIds);
-                    var deleteResult = await collection.DeleteManyAsync(deleteFilter);
-
-                    _logger.LogInformation("Cleaned up {Count} deleted transactions from MongoDB", deleteResult.DeletedCount);
-                    return (int)deleteResult.DeletedCount;
-                }
-
-                return 0;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error syncing deleted transactions: {Message}", ex.Message);
-                return 0;
-            }
-        }
-
-        private async Task SyncTransactionsDirect(SqlConnection connection, SyncResult result)
-        {
-            try
-            {
-                _logger.LogInformation("Starting optimized incremental sync of transactions to MongoDB");
-                var collection = _mongoDatabase.GetCollection<BsonDocument>("transactions");
-
-                var checkpoint = await GetSyncCheckpoint(result.DeviceId, "Transactions");
-                var lastSyncTime = checkpoint?.LastSyncTime ?? DateTime.UtcNow.AddDays(-3);
-
-                _logger.LogInformation("Syncing transactions modified after: {LastSyncTime}", lastSyncTime);
-
-                const int batchSize = 100;
-                int totalCount = 0;
-                int deletedCount = 0;
-                int batchNumber = 0;
-                DateTime maxModifiedDate = lastSyncTime;
-                bool hasMoreData = true;
-
-                if (checkpoint != null)
-                {
-                    _logger.LogInformation("Checking for deleted transactions...");
-                    deletedCount = await SyncDeletedTransactions(connection, collection, lastSyncTime);
-                    result.RecordCounts["DeletedTransactions"] = deletedCount;
-                }
-
-                int totalEstimate = await GetTransactionCount(connection, lastSyncTime);
-                _logger.LogInformation("Estimated {Count} transactions to sync in batches of {BatchSize}", totalEstimate, batchSize);
-
-                while (hasMoreData)
-                {
-                    batchNumber++;
-                    var bulkOps = new List<WriteModel<BsonDocument>>();
-
-                    _logger.LogInformation("Processing batch {BatchNumber} of approximately {TotalBatches}...",
-                        batchNumber, Math.Ceiling((double)totalEstimate / batchSize));
-
-                    using (var command = connection.CreateCommand())
-                    {
-                        command.CommandText = @"
-                            SELECT TOP (@BatchSize)
-                                TransactionId, CustomerId, CustomerName, TotalAmount, PaidAmount, 
-                                TransactionDate, TransactionType, Status, PaymentMethod, 
-                                CashierId, CashierName, CashierRole, CreatedDate, ModifiedDate
-                            FROM Transactions
-                            WHERE ModifiedDate > @LastSyncTime AND IsDeleted = 0
-                            ORDER BY ModifiedDate ASC, TransactionId ASC";
-
-                        command.Parameters.Add(new SqlParameter("@BatchSize", batchSize));
-                        command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
-                        command.CommandTimeout = 300;
-
-                        using (var reader = await command.ExecuteReaderAsync())
-                        {
-                            int batchCount = 0;
-
-                            while (await reader.ReadAsync())
+                            try
                             {
-                                batchCount++;
-                                var transactionId = reader.GetInt32(0);
-                                var modifiedDate = reader.GetDateTime(13);
-
-                                if (modifiedDate > maxModifiedDate)
-                                    maxModifiedDate = modifiedDate;
-
-                                try
+                                var doc = new BsonDocument
                                 {
-                                    var doc = new BsonDocument
-                                    {
-                                        { "_id", transactionId },
-                                        { "transactionId", transactionId }
-                                    };
+                                    { "_id", transactionId },
+                                    { "transactionId", transactionId }
+                                };
 
-                                    if (!reader.IsDBNull(1))
-                                        doc.Add("customerId", reader.GetInt32(1));
-                                    else
-                                        doc.Add("customerId", BsonNull.Value);
+                                if (!reader.IsDBNull(1))
+                                    doc.Add("customerId", reader.GetInt32(1));
+                                else
+                                    doc.Add("customerId", BsonNull.Value);
 
-                                    doc.Add("customerName", reader.IsDBNull(2) ? string.Empty : reader.GetString(2));
-                                    doc.Add("totalAmount", BsonDecimal128.Create(reader.GetDecimal(3)));
-                                    doc.Add("paidAmount", BsonDecimal128.Create(reader.GetDecimal(4)));
-                                    doc.Add("transactionDate", reader.GetDateTime(5).ToUniversalTime());
-                                    doc.Add("transactionType", GetEnumName(typeof(TransactionType), reader.GetInt32(6)));
-                                    doc.Add("status", GetEnumName(typeof(TransactionStatus), reader.GetInt32(7)));
-                                    doc.Add("paymentMethod", reader.IsDBNull(8) ? string.Empty : reader.GetString(8));
-                                    doc.Add("cashierId", reader.IsDBNull(9) ? string.Empty : reader.GetString(9));
-                                    doc.Add("cashierName", reader.IsDBNull(10) ? string.Empty : reader.GetString(10));
-                                    doc.Add("cashierRole", reader.IsDBNull(11) ? string.Empty : reader.GetString(11));
-                                    doc.Add("createdDate", reader.GetDateTime(12).ToUniversalTime());
-                                    doc.Add("modifiedDate", modifiedDate.ToUniversalTime());
-                                    doc.Add("syncedAt", DateTime.UtcNow);
+                                doc.Add("customerName", reader.IsDBNull(2) ? string.Empty : reader.GetString(2));
+                                doc.Add("totalAmount", BsonDecimal128.Create(reader.GetDecimal(3)));
+                                doc.Add("paidAmount", BsonDecimal128.Create(reader.GetDecimal(4)));
+                                doc.Add("transactionDate", reader.GetDateTime(5).ToUniversalTime());
+                                doc.Add("transactionType", reader.GetString(6));
+                                doc.Add("status", reader.GetString(7));
+                                doc.Add("incrementalSyncedAt", DateTime.UtcNow);
 
-                                    var details = await GetTransactionDetailsDirect(connection, transactionId);
-                                    doc.Add("transactionDetails", details);
+                                var details = await GetTransactionDetailsDirect(connection, transactionId);
+                                doc.Add("transactionDetails", details);
 
-                                    var filter = Builders<BsonDocument>.Filter.Eq("_id", transactionId);
-                                    var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
-                                    bulkOps.Add(upsert);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, "Error processing transaction {TransactionId} in batch {BatchNumber}", transactionId, batchNumber);
-                                }
+                                var filter = Builders<BsonDocument>.Filter.Eq("_id", transactionId);
+                                var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
+                                bulkOps.Add(upsert);
                             }
-
-                            hasMoreData = batchCount == batchSize;
-                        }
-                    }
-
-                    if (bulkOps.Count > 0)
-                    {
-                        try
-                        {
-                            _logger.LogInformation("Uploading batch {BatchNumber} with {Count} transactions to MongoDB...", batchNumber, bulkOps.Count);
-
-                            var bulkResult = await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
-                            totalCount += bulkOps.Count;
-
-                            await UpdateSyncCheckpoint(result.DeviceId, "Transactions", maxModifiedDate);
-
-                            _logger.LogInformation("Batch {BatchNumber} completed successfully. Progress: {Current}/{Total} transactions",
-                                batchNumber, totalCount, totalEstimate);
-
-                            if (hasMoreData)
-                                await Task.Delay(1000);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Error uploading batch {BatchNumber} to MongoDB: {Message}", batchNumber, ex.Message);
-                            result.Success = false;
-                            result.ErrorMessage = $"Failed at batch {batchNumber}: {ex.Message}";
-                            return;
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Error processing transaction {TransactionId}", transactionId);
+                            }
                         }
                     }
                 }
 
-                _logger.LogInformation("Transaction sync completed successfully. Total: {Count} synced, {Deleted} deleted",
-                    totalCount, deletedCount);
+                if (bulkOps.Count > 0)
+                {
+                    await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
+                    await UpdateSyncCheckpoint(result.DeviceId, "IncrementalTransactions", DateTime.UtcNow);
+                }
 
                 result.RecordCounts["Transactions"] = totalCount;
                 result.Success = true;
+                _logger.LogInformation("Incremental transaction sync completed. Total: {Count} synced", totalCount);
             }
             catch (Exception ex)
             {
@@ -319,43 +482,6 @@ namespace QuickTechDataSyncService.Services
                 result.RecordCounts["Transactions"] = 0;
                 result.Success = false;
                 result.ErrorMessage = ex.Message;
-            }
-        }
-
-        private async Task<int> GetTransactionCount(SqlConnection connection, DateTime lastSyncTime)
-        {
-            try
-            {
-                using (var command = connection.CreateCommand())
-                {
-                    command.CommandText = @"
-                        SELECT COUNT(*) 
-                        FROM Transactions 
-                        WHERE ModifiedDate > @LastSyncTime AND IsDeleted = 0";
-
-                    command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
-                    command.CommandTimeout = 60;
-
-                    var result = await command.ExecuteScalarAsync();
-                    return Convert.ToInt32(result);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting transaction count");
-                return 0;
-            }
-        }
-
-        private string GetEnumName(Type enumType, int value)
-        {
-            try
-            {
-                return Enum.GetName(enumType, value) ?? $"Unknown({value})";
-            }
-            catch
-            {
-                return $"Invalid({value})";
             }
         }
 
@@ -409,8 +535,9 @@ namespace QuickTechDataSyncService.Services
 
                 return details;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                _logger.LogError(ex, "Error getting transaction details for {TransactionId}: {Message}", transactionId, ex.Message);
                 return details;
             }
         }
@@ -444,13 +571,13 @@ namespace QuickTechDataSyncService.Services
                     await connection.OpenAsync();
                 }
 
-                _logger.LogInformation("Starting optimized full data sync with 3-day window and small batches");
+                _logger.LogInformation("Starting incremental data sync to MongoDB");
 
                 await SyncCategoriesDirect(connection, result);
                 await SyncProductsDirect(connection, result);
                 await SyncCustomersDirect(connection, result);
                 await SyncBusinessSettingsDirect(connection, result);
-                await SyncTransactionsDirect(connection, result);
+                await SyncTransactionsDirect(connection, result); // Now incremental
                 await SyncExpensesDirect(connection, result);
                 await SyncEmployeesDirect(connection, result);
 
@@ -462,7 +589,7 @@ namespace QuickTechDataSyncService.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in optimized SyncAllDataToMongoAsync: {Message}", ex.Message);
+                _logger.LogError(ex, "Error in SyncAllDataToMongoAsync: {Message}", ex.Message);
                 result.Success = false;
                 result.ErrorMessage = ex.Message;
                 result.EndTime = DateTime.UtcNow;
@@ -561,7 +688,7 @@ namespace QuickTechDataSyncService.Services
                     command.CommandText = @"
                         SELECT CategoryId, Name, Description, IsActive, Type
                         FROM Categories
-                        WHERE IsActive = 1";
+                        WHERE ISNULL(IsActive, 1) = 1";
                     command.CommandTimeout = 120;
 
                     using (var reader = await command.ExecuteReaderAsync())
@@ -577,7 +704,7 @@ namespace QuickTechDataSyncService.Services
                                 { "categoryId", categoryId },
                                 { "name", reader.GetString(1) },
                                 { "description", reader.IsDBNull(2) ? string.Empty : reader.GetString(2) },
-                                { "isActive", reader.GetBoolean(3) },
+                                { "isActive", reader.IsDBNull(3) ? true : reader.GetBoolean(3) },
                                 { "type", reader.IsDBNull(4) ? "Product" : reader.GetString(4) },
                                 { "syncedAt", DateTime.UtcNow }
                             };
@@ -592,7 +719,6 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
-                    await UpdateSyncCheckpoint(result.DeviceId, "Categories", DateTime.UtcNow);
                 }
 
                 result.RecordCounts["Categories"] = totalCount;
@@ -611,87 +737,82 @@ namespace QuickTechDataSyncService.Services
         {
             try
             {
-                _logger.LogInformation("Starting optimized sync of products to MongoDB");
+                _logger.LogInformation("Starting sync of products to MongoDB");
                 var collection = _mongoDatabase.GetCollection<BsonDocument>("products");
 
-                var checkpoint = await GetSyncCheckpoint(result.DeviceId, "Products");
-                var lastSyncTime = checkpoint?.LastSyncTime ?? DateTime.UtcNow.AddDays(-3);
-
-                const int batchSize = 200;
                 int totalCount = 0;
-                DateTime maxModifiedDate = lastSyncTime;
-                bool hasMoreData = true;
-                int batchNumber = 0;
+                var bulkOps = new List<WriteModel<BsonDocument>>();
 
-                while (hasMoreData)
+                using (var command = connection.CreateCommand())
                 {
-                    batchNumber++;
-                    var bulkOps = new List<WriteModel<BsonDocument>>();
+                    command.CommandText = @"
+                        SELECT 
+                            p.ProductId, p.Barcode, p.Name, p.Description, p.CategoryId, 
+                            p.PurchasePrice, p.SalePrice, p.CurrentStock, p.MinimumStock, 
+                            p.SupplierId, p.IsActive, p.CreatedAt, p.Speed, p.UpdatedAt, p.ImagePath,
+                            c.Name as CategoryName
+                        FROM Products p
+                        LEFT JOIN Categories c ON p.CategoryId = c.CategoryId
+                        WHERE ISNULL(p.IsActive, 1) = 1
+                        ORDER BY p.CreatedAt DESC";
 
-                    using (var command = connection.CreateCommand())
+                    command.CommandTimeout = 180;
+
+                    using (var reader = await command.ExecuteReaderAsync())
                     {
-                        command.CommandText = @"
-                            SELECT TOP (@BatchSize)
-                                p.ProductId, p.Barcode, p.Name, p.Description, p.CategoryId, 
-                                p.PurchasePrice, p.SalePrice, p.CurrentStock, p.MinimumStock, 
-                                p.SupplierId, p.IsActive, p.CreatedAt, p.Speed, p.UpdatedAt, p.ImagePath,
-                                c.Name as CategoryName
-                            FROM Products p
-                            LEFT JOIN Categories c ON p.CategoryId = c.CategoryId
-                            WHERE (p.UpdatedAt > @LastSyncTime OR p.UpdatedAt IS NULL) AND p.IsActive = 1
-                            ORDER BY ISNULL(p.UpdatedAt, p.CreatedAt) ASC, p.ProductId ASC";
-
-                        command.Parameters.Add(new SqlParameter("@BatchSize", batchSize));
-                        command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
-                        command.CommandTimeout = 180;
-
-                        using (var reader = await command.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            int batchCount = 0;
+                            totalCount++;
+                            var productId = reader.GetInt32(0);
 
-                            while (await reader.ReadAsync())
+                            var doc = new BsonDocument
                             {
-                                batchCount++;
-                                var productId = reader.GetInt32(0);
-                                var updatedAt = reader.IsDBNull(13) ? reader.GetDateTime(11) : reader.GetDateTime(13);
+                                { "_id", productId },
+                                { "productId", productId },
+                                { "barcode", reader.IsDBNull(1) ? string.Empty : reader.GetString(1) },
+                                { "name", reader.GetString(2) },
+                                { "description", reader.IsDBNull(3) ? string.Empty : reader.GetString(3) },
+                                { "categoryId", reader.GetInt32(4) },
+                                { "purchasePrice", BsonDecimal128.Create(reader.GetDecimal(5)) },
+                                { "salePrice", BsonDecimal128.Create(reader.GetDecimal(6)) },
+                                { "currentStock", BsonDecimal128.Create(reader.GetDecimal(7)) },
+                                { "minimumStock", reader.GetInt32(8) },
+                                { "isActive", reader.IsDBNull(10) ? true : reader.GetBoolean(10) },
+                                { "createdAt", reader.GetDateTime(11).ToUniversalTime() },
+                                { "syncedAt", DateTime.UtcNow }
+                            };
 
-                                if (updatedAt > maxModifiedDate)
-                                    maxModifiedDate = updatedAt;
+                            if (!reader.IsDBNull(9))
+                                doc.Add("supplierId", reader.GetInt32(9));
 
-                                var doc = new BsonDocument
+                            if (!reader.IsDBNull(12))
+                                doc.Add("speed", reader.GetString(12));
+
+                            if (!reader.IsDBNull(13))
+                                doc.Add("updatedAt", reader.GetDateTime(13).ToUniversalTime());
+
+                            if (!reader.IsDBNull(14))
+                                doc.Add("imagePath", reader.GetString(14));
+
+                            if (!reader.IsDBNull(15))
+                            {
+                                doc.Add("category", new BsonDocument
                                 {
-                                    { "_id", productId },
-                                    { "productId", productId },
-                                    { "barcode", reader.IsDBNull(1) ? string.Empty : reader.GetString(1) },
-                                    { "name", reader.GetString(2) },
                                     { "categoryId", reader.GetInt32(4) },
-                                    { "purchasePrice", BsonDecimal128.Create(reader.GetDecimal(5)) },
-                                    { "salePrice", BsonDecimal128.Create(reader.GetDecimal(6)) },
-                                    { "currentStock", BsonDecimal128.Create(reader.GetDecimal(7)) },
-                                    { "isActive", reader.GetBoolean(10) },
-                                    { "syncedAt", DateTime.UtcNow }
-                                };
-
-                                var filter = Builders<BsonDocument>.Filter.Eq("_id", productId);
-                                var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
-                                bulkOps.Add(upsert);
+                                    { "name", reader.GetString(15) }
+                                });
                             }
 
-                            hasMoreData = batchCount == batchSize;
+                            var filter = Builders<BsonDocument>.Filter.Eq("_id", productId);
+                            var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
+                            bulkOps.Add(upsert);
                         }
                     }
+                }
 
-                    if (bulkOps.Count > 0)
-                    {
-                        await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
-                        totalCount += bulkOps.Count;
-                        await UpdateSyncCheckpoint(result.DeviceId, "Products", maxModifiedDate);
-
-                        _logger.LogInformation("Products batch {BatchNumber} completed: {Count} records", batchNumber, bulkOps.Count);
-
-                        if (hasMoreData)
-                            await Task.Delay(200);
-                    }
+                if (bulkOps.Count > 0)
+                {
+                    await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
                 }
 
                 result.RecordCounts["Products"] = totalCount;
@@ -713,74 +834,53 @@ namespace QuickTechDataSyncService.Services
                 _logger.LogInformation("Starting sync of customers to MongoDB");
                 var collection = _mongoDatabase.GetCollection<BsonDocument>("customers");
 
-                var checkpoint = await GetSyncCheckpoint(result.DeviceId, "Customers");
-                var lastSyncTime = checkpoint?.LastSyncTime ?? DateTime.UtcNow.AddDays(-3);
-
-                const int batchSize = 200;
                 int totalCount = 0;
-                DateTime maxModifiedDate = lastSyncTime;
-                bool hasMoreData = true;
+                var bulkOps = new List<WriteModel<BsonDocument>>();
 
-                while (hasMoreData)
+                using (var command = connection.CreateCommand())
                 {
-                    var bulkOps = new List<WriteModel<BsonDocument>>();
+                    command.CommandText = @"
+                        SELECT CustomerId, Name, Phone, Email, Address, IsActive, CreatedAt, UpdatedAt, Balance
+                        FROM Customers
+                        WHERE ISNULL(IsActive, 1) = 1
+                        ORDER BY CreatedAt DESC";
 
-                    using (var command = connection.CreateCommand())
+                    command.CommandTimeout = 120;
+
+                    using (var reader = await command.ExecuteReaderAsync())
                     {
-                        command.CommandText = @"
-                            SELECT TOP (@BatchSize)
-                                CustomerId, Name, Phone, Email, Address, IsActive, CreatedAt, UpdatedAt, Balance
-                            FROM Customers
-                            WHERE (UpdatedAt > @LastSyncTime OR UpdatedAt IS NULL) AND IsActive = 1
-                            ORDER BY ISNULL(UpdatedAt, CreatedAt) ASC, CustomerId ASC";
-
-                        command.Parameters.Add(new SqlParameter("@BatchSize", batchSize));
-                        command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
-                        command.CommandTimeout = 120;
-
-                        using (var reader = await command.ExecuteReaderAsync())
+                        while (await reader.ReadAsync())
                         {
-                            int batchCount = 0;
+                            totalCount++;
+                            var customerId = reader.GetInt32(0);
 
-                            while (await reader.ReadAsync())
+                            var doc = new BsonDocument
                             {
-                                batchCount++;
-                                var customerId = reader.GetInt32(0);
-                                var updatedAt = reader.IsDBNull(7) ? reader.GetDateTime(6) : reader.GetDateTime(7);
+                                { "_id", customerId },
+                                { "customerId", customerId },
+                                { "name", reader.GetString(1) },
+                                { "phone", reader.IsDBNull(2) ? string.Empty : reader.GetString(2) },
+                                { "email", reader.IsDBNull(3) ? string.Empty : reader.GetString(3) },
+                                { "address", reader.IsDBNull(4) ? string.Empty : reader.GetString(4) },
+                                { "isActive", reader.IsDBNull(5) ? true : reader.GetBoolean(5) },
+                                { "createdAt", reader.GetDateTime(6).ToUniversalTime() },
+                                { "balance", BsonDecimal128.Create(reader.GetDecimal(8)) },
+                                { "syncedAt", DateTime.UtcNow }
+                            };
 
-                                if (updatedAt > maxModifiedDate)
-                                    maxModifiedDate = updatedAt;
+                            if (!reader.IsDBNull(7))
+                                doc.Add("updatedAt", reader.GetDateTime(7).ToUniversalTime());
 
-                                var doc = new BsonDocument
-                                {
-                                    { "_id", customerId },
-                                    { "customerId", customerId },
-                                    { "name", reader.GetString(1) },
-                                    { "phone", reader.IsDBNull(2) ? string.Empty : reader.GetString(2) },
-                                    { "email", reader.IsDBNull(3) ? string.Empty : reader.GetString(3) },
-                                    { "isActive", reader.GetBoolean(5) },
-                                    { "balance", BsonDecimal128.Create(reader.GetDecimal(8)) },
-                                    { "syncedAt", DateTime.UtcNow }
-                                };
-
-                                var filter = Builders<BsonDocument>.Filter.Eq("_id", customerId);
-                                var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
-                                bulkOps.Add(upsert);
-                            }
-
-                            hasMoreData = batchCount == batchSize;
+                            var filter = Builders<BsonDocument>.Filter.Eq("_id", customerId);
+                            var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
+                            bulkOps.Add(upsert);
                         }
                     }
+                }
 
-                    if (bulkOps.Count > 0)
-                    {
-                        await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
-                        totalCount += bulkOps.Count;
-                        await UpdateSyncCheckpoint(result.DeviceId, "Customers", maxModifiedDate);
-
-                        if (hasMoreData)
-                            await Task.Delay(200);
-                    }
+                if (bulkOps.Count > 0)
+                {
+                    await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
                 }
 
                 result.RecordCounts["Customers"] = totalCount;
@@ -802,9 +902,6 @@ namespace QuickTechDataSyncService.Services
                 _logger.LogInformation("Starting sync of business settings to MongoDB");
                 var collection = _mongoDatabase.GetCollection<BsonDocument>("business_settings");
 
-                var checkpoint = await GetSyncCheckpoint(result.DeviceId, "BusinessSettings");
-                var lastSyncTime = checkpoint?.LastSyncTime ?? DateTime.UtcNow.AddDays(-3);
-
                 int totalCount = 0;
                 var bulkOps = new List<WriteModel<BsonDocument>>();
 
@@ -813,10 +910,8 @@ namespace QuickTechDataSyncService.Services
                     command.CommandText = @"
                         SELECT Id, [Key], Value, Description, [Group], DataType, IsSystem, LastModified, ModifiedBy
                         FROM BusinessSettings
-                        WHERE LastModified > @LastSyncTime
-                        ORDER BY LastModified ASC";
+                        ORDER BY LastModified DESC";
 
-                    command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
                     command.CommandTimeout = 120;
 
                     using (var reader = await command.ExecuteReaderAsync())
@@ -832,8 +927,12 @@ namespace QuickTechDataSyncService.Services
                                 { "id", settingId },
                                 { "key", reader.GetString(1) },
                                 { "value", reader.GetString(2) },
-                                { "isSystem", reader.GetBoolean(6) },
+                                { "description", reader.IsDBNull(3) ? string.Empty : reader.GetString(3) },
+                                { "group", reader.IsDBNull(4) ? string.Empty : reader.GetString(4) },
+                                { "dataType", reader.IsDBNull(5) ? "string" : reader.GetString(5) },
+                                { "isSystem", reader.IsDBNull(6) ? false : reader.GetBoolean(6) },
                                 { "lastModified", reader.GetDateTime(7).ToUniversalTime() },
+                                { "modifiedBy", reader.IsDBNull(8) ? string.Empty : reader.GetString(8) },
                                 { "syncedAt", DateTime.UtcNow }
                             };
 
@@ -847,7 +946,6 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
-                    await UpdateSyncCheckpoint(result.DeviceId, "BusinessSettings", DateTime.UtcNow);
                 }
 
                 result.RecordCounts["BusinessSettings"] = totalCount;
@@ -955,9 +1053,6 @@ namespace QuickTechDataSyncService.Services
                 _logger.LogInformation("Starting sync of expenses to MongoDB");
                 var collection = _mongoDatabase.GetCollection<BsonDocument>("expenses");
 
-                var checkpoint = await GetSyncCheckpoint(result.DeviceId, "Expenses");
-                var lastSyncTime = checkpoint?.LastSyncTime ?? DateTime.UtcNow.AddDays(-3);
-
                 int totalCount = 0;
                 var bulkOps = new List<WriteModel<BsonDocument>>();
 
@@ -966,10 +1061,8 @@ namespace QuickTechDataSyncService.Services
                     command.CommandText = @"
                         SELECT ExpenseId, Reason, Amount, Date, Notes, Category, IsRecurring, CreatedAt, UpdatedAt
                         FROM Expenses
-                        WHERE UpdatedAt > @LastSyncTime OR UpdatedAt IS NULL
-                        ORDER BY ISNULL(UpdatedAt, CreatedAt) ASC";
+                        ORDER BY CreatedAt DESC";
 
-                    command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
                     command.CommandTimeout = 120;
 
                     using (var reader = await command.ExecuteReaderAsync())
@@ -985,11 +1078,16 @@ namespace QuickTechDataSyncService.Services
                                 { "expenseId", expenseId },
                                 { "reason", reader.GetString(1) },
                                 { "amount", BsonDecimal128.Create(reader.GetDecimal(2)) },
-                                { "date", reader.GetDateTime(3) },
+                                { "date", reader.GetDateTime(3).ToUniversalTime() },
+                                { "notes", reader.IsDBNull(4) ? string.Empty : reader.GetString(4) },
                                 { "category", reader.GetString(5) },
                                 { "isRecurring", reader.GetBoolean(6) },
+                                { "createdAt", reader.GetDateTime(7).ToUniversalTime() },
                                 { "syncedAt", DateTime.UtcNow }
                             };
+
+                            if (!reader.IsDBNull(8))
+                                doc.Add("updatedAt", reader.GetDateTime(8).ToUniversalTime());
 
                             var filter = Builders<BsonDocument>.Filter.Eq("_id", expenseId);
                             var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
@@ -1001,12 +1099,11 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
-                    await UpdateSyncCheckpoint(result.DeviceId, "Expenses", DateTime.UtcNow);
                 }
 
                 result.RecordCounts["Expenses"] = totalCount;
                 result.Success = true;
-                _logger.LogInformation("Expenses sync completed: {Count} records", totalCount);
+                _logger.LogInformation("Expenses sync completed: {Count} records (Note: Your database has 0 expenses)", totalCount);
             }
             catch (Exception ex)
             {
@@ -1023,21 +1120,17 @@ namespace QuickTechDataSyncService.Services
                 _logger.LogInformation("Starting sync of employees to MongoDB");
                 var collection = _mongoDatabase.GetCollection<BsonDocument>("employees");
 
-                var checkpoint = await GetSyncCheckpoint(result.DeviceId, "Employees");
-                var lastSyncTime = checkpoint?.LastSyncTime ?? DateTime.UtcNow.AddDays(-3);
-
                 int totalCount = 0;
                 var bulkOps = new List<WriteModel<BsonDocument>>();
 
                 using (var command = connection.CreateCommand())
                 {
                     command.CommandText = @"
-                        SELECT EmployeeId, Username, PasswordHash, FirstName, LastName, Role, IsActive, CreatedAt, LastLogin, MonthlySalary, CurrentBalance
+                        SELECT EmployeeId, Username, PasswordHash, FirstName, LastName, Role, IsActive, CreatedAt
                         FROM Employees
-                        WHERE e.CreatedAt > @LastSyncTime AND IsActive = 1
-                        ORDER BY CreatedAt ASC";
+                        WHERE ISNULL(IsActive, 1) = 1
+                        ORDER BY CreatedAt DESC";
 
-                    command.Parameters.Add(new SqlParameter("@LastSyncTime", lastSyncTime));
                     command.CommandTimeout = 120;
 
                     using (var reader = await command.ExecuteReaderAsync())
@@ -1052,14 +1145,17 @@ namespace QuickTechDataSyncService.Services
                                 { "_id", employeeId },
                                 { "employeeId", employeeId },
                                 { "username", reader.GetString(1) },
+                                { "passwordHash", reader.GetString(2) },
                                 { "firstName", reader.GetString(3) },
                                 { "lastName", reader.GetString(4) },
                                 { "role", reader.GetString(5) },
-                                { "isActive", reader.GetBoolean(6) },
-                                { "monthlySalary", BsonDecimal128.Create(reader.GetDecimal(9)) },
-                                { "currentBalance", BsonDecimal128.Create(reader.GetDecimal(10)) },
+                                { "isActive", reader.IsDBNull(6) ? true : reader.GetBoolean(6) },
+                                { "createdAt", reader.GetDateTime(7).ToUniversalTime() },
                                 { "syncedAt", DateTime.UtcNow }
                             };
+
+                            var salaryTransactions = await GetEmployeeSalaryTransactionsDirect(connection, employeeId);
+                            doc.Add("salaryTransactions", salaryTransactions);
 
                             var filter = Builders<BsonDocument>.Filter.Eq("_id", employeeId);
                             var upsert = new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
@@ -1071,7 +1167,6 @@ namespace QuickTechDataSyncService.Services
                 if (bulkOps.Count > 0)
                 {
                     await collection.BulkWriteAsync(bulkOps, new BulkWriteOptions { IsOrdered = false });
-                    await UpdateSyncCheckpoint(result.DeviceId, "Employees", DateTime.UtcNow);
                 }
 
                 result.RecordCounts["Employees"] = totalCount;
@@ -1084,6 +1179,49 @@ namespace QuickTechDataSyncService.Services
                 result.RecordCounts["Employees"] = 0;
                 result.Success = false;
             }
+        }
+
+        private async Task<BsonArray> GetEmployeeSalaryTransactionsDirect(SqlConnection connection, int employeeId)
+        {
+            var transactions = new BsonArray();
+            try
+            {
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+                        SELECT Id, EmployeeId, Amount, TransactionType, TransactionDate, Notes
+                        FROM EmployeeSalaryTransactions
+                        WHERE EmployeeId = @EmployeeId
+                        ORDER BY TransactionDate DESC";
+
+                    command.Parameters.Add(new SqlParameter("@EmployeeId", employeeId));
+                    command.CommandTimeout = 60;
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            var transactionDoc = new BsonDocument
+                            {
+                                { "id", reader.GetInt32(0) },
+                                { "employeeId", reader.GetInt32(1) },
+                                { "amount", BsonDecimal128.Create(reader.GetDecimal(2)) },
+                                { "transactionType", reader.GetString(3) },
+                                { "transactionDate", reader.GetDateTime(4).ToUniversalTime() },
+                                { "notes", reader.IsDBNull(5) ? string.Empty : reader.GetString(5) }
+                            };
+
+                            transactions.Add(transactionDoc);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Could not get salary transactions for employee {EmployeeId} (table may not exist): {Message}", employeeId, ex.Message);
+            }
+
+            return transactions;
         }
 
         private async Task LogSyncActivity(string deviceId, string entityType, bool success, int recordCount)

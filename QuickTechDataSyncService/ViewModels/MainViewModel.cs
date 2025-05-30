@@ -29,11 +29,13 @@ namespace QuickTechDataSyncService.ViewModels
         private string _mongoStatus = "Not Initialized";
         private bool _isMongoInitialized = false;
         private bool _isSyncing = false;
+        private bool _isBulkSyncing = false;
+        private bool _isAutoSyncEnabled = false; // Default OFF
+        private string _bulkSyncProgress = string.Empty;
         private readonly ILogger<MainViewModel> _logger;
         private string _deviceId = $"Desktop-{Environment.MachineName}";
         private Timer _autoSyncTimer;
         private readonly TimeSpan _syncInterval = TimeSpan.FromMinutes(2);
-        private bool _isAutoSyncEnabled = false;
 
         public string ServerStatus
         {
@@ -83,6 +85,12 @@ namespace QuickTechDataSyncService.ViewModels
             set => SetProperty(ref _isSyncing, value);
         }
 
+        public bool IsBulkSyncing
+        {
+            get => _isBulkSyncing;
+            set => SetProperty(ref _isBulkSyncing, value);
+        }
+
         public string DeviceId
         {
             get => _deviceId;
@@ -92,7 +100,22 @@ namespace QuickTechDataSyncService.ViewModels
         public bool IsAutoSyncEnabled
         {
             get => _isAutoSyncEnabled;
-            set => SetProperty(ref _isAutoSyncEnabled, value);
+            set
+            {
+                if (SetProperty(ref _isAutoSyncEnabled, value))
+                {
+                    if (value)
+                        StartAutoSync();
+                    else
+                        StopAutoSync();
+                }
+            }
+        }
+
+        public string BulkSyncProgress
+        {
+            get => _bulkSyncProgress;
+            set => SetProperty(ref _bulkSyncProgress, value);
         }
 
         public ICommand StartServerCommand { get; }
@@ -101,6 +124,7 @@ namespace QuickTechDataSyncService.ViewModels
         public ICommand ClearLogsCommand { get; }
         public ICommand InitializeMongoDbCommand { get; }
         public ICommand SyncAllToMongoDbCommand { get; }
+        public ICommand InitialBulkSyncCommand { get; }
         public ICommand SyncProductsToMongoDbCommand { get; }
         public ICommand SyncCategoriesToMongoDbCommand { get; }
         public ICommand SyncCustomersToMongoDbCommand { get; }
@@ -120,20 +144,24 @@ namespace QuickTechDataSyncService.ViewModels
             ClearLogsCommand = new RelayCommand(ClearLogs);
 
             InitializeMongoDbCommand = new RelayCommand(InitializeMongoDb);
-            SyncAllToMongoDbCommand = new RelayCommand(SyncAllToMongoDb, () => !IsSyncing);
-            SyncProductsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Products"), () => !IsSyncing);
-            SyncCategoriesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Categories"), () => !IsSyncing);
-            SyncCustomersToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Customers"), () => !IsSyncing);
-            SyncTransactionsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Transactions"), () => !IsSyncing);
-            SyncSettingsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Business_Settings"), () => !IsSyncing);
-            SyncExpensesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Expenses"), () => !IsSyncing);
-            SyncEmployeesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Employees"), () => !IsSyncing);
+            SyncAllToMongoDbCommand = new RelayCommand(SyncAllToMongoDb, () => !IsSyncing && !IsBulkSyncing);
+            InitialBulkSyncCommand = new RelayCommand(BulkSyncTransactions, () => !IsSyncing && !IsBulkSyncing);
 
-            AddLogMessage("Application started. Initializing automatic synchronization...");
+            SyncProductsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Products"), () => !IsSyncing && !IsBulkSyncing);
+            SyncCategoriesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Categories"), () => !IsSyncing && !IsBulkSyncing);
+            SyncCustomersToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Customers"), () => !IsSyncing && !IsBulkSyncing);
+            SyncTransactionsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Transactions"), () => !IsSyncing && !IsBulkSyncing);
+            SyncSettingsToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Business_Settings"), () => !IsSyncing && !IsBulkSyncing);
+            SyncExpensesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Expenses"), () => !IsSyncing && !IsBulkSyncing);
+            SyncEmployeesToMongoDbCommand = new RelayCommand(() => SyncEntityToMongoDb("Employees"), () => !IsSyncing && !IsBulkSyncing);
+
+            AddLogMessage("Application started. Auto-sync is disabled by default.");
+            AddLogMessage("Enable auto-sync toggle to start automatic synchronization.");
 
             _autoSyncTimer = new Timer(async _ => await RunAutoSyncAsync(), null, Timeout.Infinite, Timeout.Infinite);
 
-            StartAutoSync();
+            // Initialize databases but don't start auto-sync (wait for user toggle)
+            InitializeDatabasesOnly();
         }
 
         private ILogger<MainViewModel> CreateDefaultLogger()
@@ -152,18 +180,25 @@ namespace QuickTechDataSyncService.ViewModels
 
         private void StartAutoSync()
         {
-            if (IsAutoSyncEnabled) return;
+            if (_autoSyncTimer == null) return;
 
-            AddLogMessage("Starting automatic synchronization service...");
-
-            InitializeDatabasesAndStartSync();
+            AddLogMessage("Auto-sync enabled. Starting automatic synchronization...");
+            _autoSyncTimer.Change(TimeSpan.Zero, _syncInterval);
         }
 
-        private async void InitializeDatabasesAndStartSync()
+        private void StopAutoSync()
+        {
+            if (_autoSyncTimer == null) return;
+
+            AddLogMessage("Auto-sync disabled. Stopping automatic synchronization.");
+            _autoSyncTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+
+        private async void InitializeDatabasesOnly()
         {
             try
             {
-                AddLogMessage("Testing SQL Server connection...");
+                AddLogMessage("Initializing database connections...");
                 await _host.StartAsync();
 
                 var dbContext = _host.Services.GetRequiredService<Data.ApplicationDbContext>();
@@ -171,20 +206,19 @@ namespace QuickTechDataSyncService.ViewModels
 
                 if (!canConnect)
                 {
-                    AddLogMessage("ERROR: Cannot connect to SQL Server database. Auto-sync will not start.");
+                    AddLogMessage("ERROR: Cannot connect to SQL Server database.");
                     return;
                 }
 
                 ConnectionStatus = "Connected";
                 AddLogMessage("SQL Server connection successful");
 
-                AddLogMessage("Initializing MongoDB connection...");
                 var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
                 var mongoInitialized = await mongoService.InitializeMongoAsync();
 
                 if (!mongoInitialized)
                 {
-                    AddLogMessage("ERROR: Cannot connect to MongoDB. Auto-sync will not start.");
+                    AddLogMessage("ERROR: Cannot connect to MongoDB.");
                     return;
                 }
 
@@ -199,21 +233,18 @@ namespace QuickTechDataSyncService.ViewModels
                 var addressFeature = server.Features.Get<IServerAddressesFeature>();
                 ServerUrl = addressFeature?.Addresses.FirstOrDefault() ?? "http://localhost:5000";
 
-                await RunAutoSyncAsync();
-
-                _autoSyncTimer.Change(TimeSpan.Zero, _syncInterval);
-
-                IsAutoSyncEnabled = true;
-                AddLogMessage($"Automatic synchronization service started. Data will sync every {_syncInterval.TotalMinutes} minutes.");
+                AddLogMessage("System ready. Toggle auto-sync to enable automatic synchronization.");
             }
             catch (Exception ex)
             {
-                AddLogMessage($"ERROR: Failed to initialize databases: {ex.Message}");
+                AddLogMessage($"ERROR: Failed to initialize: {ex.Message}");
             }
         }
 
         private async Task RunAutoSyncAsync()
         {
+            if (!IsAutoSyncEnabled) return;
+
             try
             {
                 AddLogMessage("Starting scheduled incremental synchronization...");
@@ -221,7 +252,6 @@ namespace QuickTechDataSyncService.ViewModels
                 IsSyncing = true;
 
                 var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
-
                 var result = await mongoService.SyncAllDataToMongoAsync(DeviceId);
 
                 if (result.Success)
@@ -241,8 +271,6 @@ namespace QuickTechDataSyncService.ViewModels
                 {
                     AddLogMessage($"Scheduled sync failed: {result.ErrorMessage}");
                 }
-
-                AddLogMessage($"Next synchronization in {_syncInterval.TotalMinutes} minutes");
             }
             catch (Exception ex)
             {
@@ -251,6 +279,48 @@ namespace QuickTechDataSyncService.ViewModels
             finally
             {
                 IsSyncing = false;
+            }
+        }
+
+        private async void BulkSyncTransactions()
+        {
+            if (IsBulkSyncing || IsSyncing) return;
+
+            try
+            {
+                IsBulkSyncing = true;
+                BulkSyncProgress = "Starting bulk sync...";
+                AddLogMessage("Starting initial bulk sync of all transactions...");
+
+                var mongoService = _host.Services.GetRequiredService<IMongoDbSyncService>();
+
+                // Use new bulk sync method
+                var result = await mongoService.BulkSyncTransactionsAsync(DeviceId, progress =>
+                {
+                    BulkSyncProgress = progress;
+                    AddLogMessage(progress);
+                });
+
+                if (result.Success)
+                {
+                    var totalRecords = result.RecordCounts.Values.Sum();
+                    AddLogMessage($"Bulk sync completed successfully in {result.Duration.TotalMinutes:F1} minutes. Total records: {totalRecords}");
+                    BulkSyncProgress = $"Completed: {totalRecords} transactions synced";
+                }
+                else
+                {
+                    AddLogMessage($"Bulk sync failed: {result.ErrorMessage}");
+                    BulkSyncProgress = $"Failed: {result.ErrorMessage}";
+                }
+            }
+            catch (Exception ex)
+            {
+                AddLogMessage($"Error during bulk sync: {ex.Message}");
+                BulkSyncProgress = $"Error: {ex.Message}";
+            }
+            finally
+            {
+                IsBulkSyncing = false;
             }
         }
 
@@ -359,7 +429,7 @@ namespace QuickTechDataSyncService.ViewModels
 
         private async void SyncAllToMongoDb()
         {
-            if (IsSyncing) return;
+            if (IsSyncing || IsBulkSyncing) return;
 
             try
             {
@@ -391,7 +461,7 @@ namespace QuickTechDataSyncService.ViewModels
 
         private async void SyncEntityToMongoDb(string entityType)
         {
-            if (IsSyncing) return;
+            if (IsSyncing || IsBulkSyncing) return;
 
             try
             {
@@ -440,6 +510,8 @@ namespace QuickTechDataSyncService.ViewModels
 
         public async Task ShutdownAsync()
         {
+            IsAutoSyncEnabled = false;
+
             if (_autoSyncTimer != null)
             {
                 _autoSyncTimer.Change(Timeout.Infinite, Timeout.Infinite);
